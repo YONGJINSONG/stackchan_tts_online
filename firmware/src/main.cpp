@@ -133,7 +133,12 @@ void lipSync(void *args)
     float open = (float)level/15000.0;
     avatar->setMouthOpenRatio(open);
     avatar->getGaze(&gazeY, &gazeX);
-    avatar->setRotation(gazeX * 5);
+    // LayeredFace: skip head tilt — rotation forces slow pushRotateZoom every frame.
+    if (!layered_face_active()) {
+      avatar->setRotation(gazeX * 5);
+    } else {
+      avatar->setRotation(0);
+    }
     delay(100);
   }
 }
@@ -752,15 +757,24 @@ void loop()
       int16_t dx = t.distanceX();
       int16_t dy = t.distanceY();
 
-      // detect flick right/left
-      if(abs(dx) >= abs(dy))
+      // Ignore small wobbles — they were stealing taps from listen (mode switch).
+      constexpr int16_t kMinFlick = 100;
+      if (abs(dx) >= kMinFlick && abs(dx) >= abs(dy))
       {
+        Serial.printf("[touch] flick dx=%d -> change_mod\n", (int)dx);
         if(dx > 0){
           change_mod(true);
         }
         else{
           change_mod();
         }
+        Serial.printf("[mod] now: %s\n", get_current_mod()->getName().c_str());
+      }
+      else if (t.wasReleased())
+      {
+        // Short drag that didn't qualify as flick: still treat as tap.
+        Serial.printf("[touch] soft-flick as tap x=%d y=%d\n", (int)t.x, (int)t.y);
+        mod->display_touched(t.x, t.y);
       }
     }
     else if (t.wasReleased())

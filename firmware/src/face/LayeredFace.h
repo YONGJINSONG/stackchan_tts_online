@@ -8,8 +8,8 @@
 #include "DrawContext.h"
 
 // SD /face/{base,eyes,mouth,blush,fx}/*.png layered avatar.
-// Expects 320x240 assets (pre-resized). Composites base + blush + eyes + mouth + fx
-// with mouthOpenRatio lipsync. Falls back to vector Face::draw if base missing.
+// Layers are decoded once at boot into RGB565 sprites (magenta = transparent).
+// Per-frame work is pushSprite only — drawPng in the avatar loop freezes input.
 
 class LayeredFace : public m5avatar::Face {
 public:
@@ -20,20 +20,9 @@ public:
 
   bool isReady() const { return _ready; }
 
-  // True if /face/base/base.png (or .jpg) exists on SD.
   static bool sdReady();
 
 private:
-  struct PngBuf {
-    uint8_t* data = nullptr;
-    size_t size = 0;
-    bool ok() const { return data != nullptr && size > 0; }
-    void clear() {
-      if (data) { free(data); data = nullptr; }
-      size = 0;
-    }
-  };
-
   enum EyeId {
     EYE_CENTER = 0,
     EYE_HAPPY,
@@ -56,30 +45,33 @@ private:
   enum BlushId { BLUSH_NONE = -1, BLUSH_NORMAL = 0, BLUSH_SHY, BLUSH_COUNT };
   enum FxId { FX_NONE = -1, FX_TEAR = 0, FX_ZZZ, FX_COUNT };
 
-  PngBuf _base;
-  PngBuf _eyes[EYE_COUNT];
-  PngBuf _mouths[MOUTH_COUNT];
-  PngBuf _blush[BLUSH_COUNT];
-  PngBuf _fx[FX_COUNT];
+  // Magenta chroma key for transparent areas (not used in art outlines).
+  static constexpr uint16_t kTrans = 0xF81F;
 
+  M5Canvas* _base = nullptr;
+  M5Canvas* _eyes[EYE_COUNT] = {};
+  M5Canvas* _mouths[MOUTH_COUNT] = {};
+  M5Canvas* _blush[BLUSH_COUNT] = {};
+  M5Canvas* _fx[FX_COUNT] = {};
   M5Canvas* _composite = nullptr;
-  bool _ready = false;
 
+  bool _ready = false;
   int _lastEye = -1;
   int _lastMouth = -1;
   int _lastBlush = -2;
   int _lastFx = -2;
+  int _mouthBand = 0;  // hysteresis: 0 closed, 1 mid, 2 open
 
-  bool loadPng(const char* path, PngBuf& out);
+  M5Canvas* loadLayerSprite(const char* path, bool opaqueBase);
+  void freeSprite(M5Canvas*& spr);
   void loadAll();
   void pickLayers(m5avatar::Expression e, float mouthOpen,
-                  EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx) const;
+                  EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx);
   void ensureComposite(int w, int h);
   void rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx);
-  void blitPng(const PngBuf& png);
+  void blitLayer(M5Canvas* layer, bool opaque);
 };
 
-// Set true when main.cpp installs LayeredFace (RealtimeAiMod skips RoboEyes).
 bool layered_face_active();
 void layered_face_set_active(bool on);
 

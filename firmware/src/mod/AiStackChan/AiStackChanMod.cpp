@@ -80,6 +80,8 @@ static void STT_ChatGPT(const char *base64_buf = NULL) {
 #endif
   Serial.println("音声認識終了");
   Serial.println("音声認識結果");
+  ret.trim();
+  if (ret.equalsIgnoreCase("null")) ret = "";
   if(ret != "") {
     Serial.println(ret);
     robot->chat(ret, base64_buf);
@@ -107,7 +109,8 @@ AiStackChanMod::AiStackChanMod(bool _isOffline)
   box_stt.setupBox(107, 0, M5.Display.width()-107, 80);
   box_subWindow.setupBox(0, 0, 107, 80);
 #else
-  box_stt.setupBox(0, 0, M5.Display.width(), 60);
+  // Full-screen listen tap — top-60px was easy to miss on the layered face.
+  box_stt.setupBox(0, 0, M5.Display.width(), M5.Display.height());
 #endif
   box_BtnA.setupBox(0, 100, 40, 60);
   box_BtnC.setupBox(280, 100, 40, 60);
@@ -139,7 +142,8 @@ AiStackChanMod::AiStackChanMod(bool _isOffline)
 
 void AiStackChanMod::init(void)
 {
-  avatar.setSpeechText("AI Stack-chan");
+  avatar.setSpeechText("터치하면 말해줘");
+  Serial.println("[mod] AiStackChan init — tap screen to talk");
 #if defined(ENABLE_CAMERA)
   if(isSubWindowON){
     avatar.set_isSubWindowEnable(true);
@@ -227,6 +231,8 @@ void AiStackChanMod::btnC_pressed(void)
 
 void AiStackChanMod::display_touched(int16_t x, int16_t y)
 {
+  Serial.printf("[touch] AiStackChan x=%d y=%d stt=%d\n", (int)x, (int)y,
+                (int)box_stt.contain(x, y));
   if (box_stt.contain(x, y))
   {
     sw_tone();

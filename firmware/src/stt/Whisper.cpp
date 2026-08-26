@@ -69,9 +69,23 @@ String Whisper::Transcribe(AudioWhisper* audio) {
     }
   }
 
+  // Parse status line (e.g. "HTTP/1.1 200 OK") then headers/body.
+  String statusLine = client.readStringUntil('\n');
+  statusLine.trim();
+  int httpCode = 0;
+  if (statusLine.startsWith("HTTP/")) {
+    int sp1 = statusLine.indexOf(' ');
+    int sp2 = statusLine.indexOf(' ', sp1 + 1);
+    if (sp1 > 0) {
+      String codeStr = (sp2 > sp1) ? statusLine.substring(sp1 + 1, sp2)
+                                   : statusLine.substring(sp1 + 1);
+      httpCode = codeStr.toInt();
+    }
+  }
+
   bool isBody = false;
   String body = "";
-  while(client.available()){
+  while (client.available()) {
     const auto line = client.readStringUntil('\r');
     if (isBody) {
       body += line;
@@ -79,10 +93,34 @@ String Whisper::Transcribe(AudioWhisper* audio) {
       isBody = true;
     }
   }
+  body.trim();
 
-  StaticJsonDocument<200> doc;
-  ::deserializeJson(doc, body);
-  return doc["text"].as<String>();
+  if (httpCode != 0 && httpCode != 200) {
+    Serial.printf("Whisper: HTTP %d\n", httpCode);
+    Serial.println(body.substring(0, 240));
+    return "";
+  }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    Serial.printf("Whisper: JSON parse error: %s\n", err.c_str());
+    Serial.println(body.substring(0, 240));
+    return "";
+  }
+  // Missing/null "text" must NOT become the literal string "null" (ArduinoJson quirk).
+  if (doc["text"].isNull()) {
+    Serial.println("Whisper: no text in response (auth/quota/empty audio?)");
+    Serial.println(body.substring(0, 240));
+    return "";
+  }
+  String text = doc["text"].as<String>();
+  text.trim();
+  if (text.length() == 0 || text.equalsIgnoreCase("null")) {
+    Serial.println("Whisper: empty transcript");
+    return "";
+  }
+  return text;
 }
 
 

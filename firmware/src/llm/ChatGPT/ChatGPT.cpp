@@ -182,6 +182,15 @@ String ChatGPT::https_post_json(const char* url, const char* json_string, const 
             Serial.println("//////////////");
             Serial.println(payload);
             Serial.println("//////////////");
+          } else {
+            // Keep body for diagnostics (429 quota, 401 auth, 400 bad request, …).
+            String errBody = https.getString();
+            Serial.println(errBody.substring(0, 400));
+            // Stash a short marker so execChatGpt can show a useful Korean message.
+            if (httpCode == 401) payload = String("__HTTP_401__");
+            else if (httpCode == 429) payload = String("__HTTP_429__");
+            else if (httpCode == 400) payload = String("__HTTP_400__");
+            else payload = String("__HTTP_") + String(httpCode) + "__";
           }
         } else {
           Serial.printf("[HTTPS] POST... failed, error: %s\n", https.errorToString(httpCode).c_str());
@@ -299,11 +308,31 @@ String ChatGPT::execChatGpt(String json_string, String& calledFunc) {
   String response = "";
   avatar.setExpression(Expression::Doubt);
   avatar.setSpeechFont(&fonts::efontKR_16);
-  avatar.setSpeechText("考え中…");
+  avatar.setSpeechText("생각 중…");
   String ret = https_post_json("https://api.openai.com/v1/chat/completions", json_string.c_str(), root_ca_openai);
   avatar.setExpression(Expression::Neutral);
   avatar.setSpeechText("");
   Serial.println(ret);
+
+  if (ret.startsWith("__HTTP_")) {
+    avatar.setExpression(Expression::Sad);
+    if (ret == "__HTTP_401__") {
+      response = "OpenAI 키가 잘못됐어요.";
+    } else if (ret == "__HTTP_429__") {
+      response = "OpenAI 사용량 한도에 걸렸어요. 잠시 뒤에 다시 해줘.";
+    } else if (ret == "__HTTP_400__") {
+      response = "요청이 거절됐어요. 설정을 확인해줘.";
+    } else {
+      response = "서버에 연결하지 못했어요.";
+    }
+    avatar.setSpeechText(response.c_str());
+    delay(1000);
+    avatar.setSpeechText("");
+    avatar.setExpression(Expression::Neutral);
+    calledFunc = String("");
+    return response;
+  }
+
   if(ret != ""){
     DynamicJsonDocument doc(2000);
     DeserializationError error = deserializeJson(doc, ret.c_str());
@@ -311,8 +340,8 @@ String ChatGPT::execChatGpt(String json_string, String& calledFunc) {
       Serial.print(F("deserializeJson() failed: "));
       Serial.println(error.f_str());
       avatar.setExpression(Expression::Sad);
-      avatar.setSpeechText("エラーです");
-      response = "エラーです";
+      avatar.setSpeechText("응답 해석에 실패했어요");
+      response = "응답 해석에 실패했어요";
       delay(1000);
       avatar.setSpeechText("");
       avatar.setExpression(Expression::Neutral);
@@ -338,8 +367,8 @@ String ChatGPT::execChatGpt(String json_string, String& calledFunc) {
   } else {
     avatar.setExpression(Expression::Sad);
     avatar.setSpeechFont(&fonts::efontKR_16);
-    avatar.setSpeechText("わかりません");
-    response = "わかりません";
+    avatar.setSpeechText("서버에 연결하지 못했어요");
+    response = "서버에 연결하지 못했어요";
     delay(1000);
     avatar.setSpeechText("");
     avatar.setExpression(Expression::Neutral);

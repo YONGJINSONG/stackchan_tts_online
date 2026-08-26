@@ -19,76 +19,104 @@ bool LayeredFace::sdReady() {
   return SD.exists("/face/base/base.png") || SD.exists("/face/base/base.jpg");
 }
 
-bool LayeredFace::loadPng(const char* path, PngBuf& out) {
-  out.clear();
+void LayeredFace::freeSprite(M5Canvas*& spr) {
+  if (!spr) return;
+  spr->deleteSprite();
+  delete spr;
+  spr = nullptr;
+}
+
+M5Canvas* LayeredFace::loadLayerSprite(const char* path, bool opaqueBase) {
   if (!SD.exists(path)) {
     Serial.printf("[layered-face] missing: %s\n", path);
-    return false;
+    return nullptr;
   }
   File f = SD.open(path, "r");
   if (!f) {
     Serial.printf("[layered-face] open failed: %s\n", path);
-    return false;
+    return nullptr;
   }
   size_t sz = f.size();
   if (sz == 0 || sz > 512 * 1024) {
     Serial.printf("[layered-face] bad size %u: %s\n", (unsigned)sz, path);
     f.close();
-    return false;
+    return nullptr;
   }
   uint8_t* buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!buf) buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_8BIT);
   if (!buf) {
     Serial.printf("[layered-face] alloc failed (%u): %s\n", (unsigned)sz, path);
     f.close();
-    return false;
+    return nullptr;
   }
   size_t got = f.read(buf, sz);
   f.close();
   if (got != sz) {
     Serial.printf("[layered-face] short read %u/%u: %s\n", (unsigned)got, (unsigned)sz, path);
     free(buf);
-    return false;
+    return nullptr;
   }
-  out.data = buf;
-  out.size = sz;
-  Serial.printf("[layered-face] loaded %s (%u)\n", path, (unsigned)sz);
-  return true;
+
+  const int w = 320;
+  const int h = 240;
+  M5Canvas* spr = new M5Canvas(&M5.Display);
+  spr->setPsram(true);
+  spr->setColorDepth(16);
+  if (!spr->createSprite(w, h)) {
+    Serial.printf("[layered-face] sprite failed: %s\n", path);
+    free(buf);
+    delete spr;
+    return nullptr;
+  }
+  if (opaqueBase) {
+    spr->fillSprite(TFT_BLACK);
+  } else {
+    spr->fillSprite(kTrans);
+  }
+  bool ok = spr->drawPng(buf, sz);
+  if (!ok) ok = spr->drawJpg(buf, sz);
+  free(buf);
+  if (!ok) {
+    Serial.printf("[layered-face] decode failed: %s\n", path);
+    freeSprite(spr);
+    return nullptr;
+  }
+  Serial.printf("[layered-face] rasterized %s\n", path);
+  return spr;
 }
 
 void LayeredFace::loadAll() {
-  if (!loadPng("/face/base/base.png", _base)) {
-    loadPng("/face/base/base.jpg", _base);
-  }
-  if (!_base.ok()) {
+  _base = loadLayerSprite("/face/base/base.png", true);
+  if (!_base) _base = loadLayerSprite("/face/base/base.jpg", true);
+  if (!_base) {
     Serial.println("[layered-face] no base — not ready");
     _ready = false;
     return;
   }
 
-  loadPng("/face/eyes/eye_center.png", _eyes[EYE_CENTER]);
-  loadPng("/face/eyes/eye_happy.png", _eyes[EYE_HAPPY]);
-  loadPng("/face/eyes/eye_angry.png", _eyes[EYE_ANGRY]);
-  loadPng("/face/eyes/eye_sad.png", _eyes[EYE_SAD]);
-  loadPng("/face/eyes/eye_sleepy.png", _eyes[EYE_SLEEPY]);
-  loadPng("/face/eyes/eyes_surprised.png", _eyes[EYE_SURPRISED]);
+  _eyes[EYE_CENTER] = loadLayerSprite("/face/eyes/eye_center.png", false);
+  _eyes[EYE_HAPPY] = loadLayerSprite("/face/eyes/eye_happy.png", false);
+  _eyes[EYE_ANGRY] = loadLayerSprite("/face/eyes/eye_angry.png", false);
+  _eyes[EYE_SAD] = loadLayerSprite("/face/eyes/eye_sad.png", false);
+  _eyes[EYE_SLEEPY] = loadLayerSprite("/face/eyes/eye_sleepy.png", false);
+  _eyes[EYE_SURPRISED] = loadLayerSprite("/face/eyes/eyes_surprised.png", false);
 
-  loadPng("/face/mouth/mouth_idle.png", _mouths[MOUTH_IDLE]);
-  loadPng("/face/mouth/mouth_smile.png", _mouths[MOUTH_SMILE]);
-  loadPng("/face/mouth/mouth_angry.png", _mouths[MOUTH_ANGRY]);
-  loadPng("/face/mouth/mouth_sad.png", _mouths[MOUTH_SAD]);
-  loadPng("/face/mouth/mouth_o.png", _mouths[MOUTH_O]);
-  loadPng("/face/mouth/mouth_open1.png", _mouths[MOUTH_OPEN1]);
-  loadPng("/face/mouth/mouth_open2.png", _mouths[MOUTH_OPEN2]);
+  _mouths[MOUTH_IDLE] = loadLayerSprite("/face/mouth/mouth_idle.png", false);
+  _mouths[MOUTH_SMILE] = loadLayerSprite("/face/mouth/mouth_smile.png", false);
+  _mouths[MOUTH_ANGRY] = loadLayerSprite("/face/mouth/mouth_angry.png", false);
+  _mouths[MOUTH_SAD] = loadLayerSprite("/face/mouth/mouth_sad.png", false);
+  _mouths[MOUTH_O] = loadLayerSprite("/face/mouth/mouth_o.png", false);
+  _mouths[MOUTH_OPEN1] = loadLayerSprite("/face/mouth/mouth_open1.png", false);
+  _mouths[MOUTH_OPEN2] = loadLayerSprite("/face/mouth/mouth_open2.png", false);
 
-  loadPng("/face/blush/blush_normal.png", _blush[BLUSH_NORMAL]);
-  loadPng("/face/blush/blush_shy.png", _blush[BLUSH_SHY]);
+  _blush[BLUSH_NORMAL] = loadLayerSprite("/face/blush/blush_normal.png", false);
+  _blush[BLUSH_SHY] = loadLayerSprite("/face/blush/blush_shy.png", false);
 
-  loadPng("/face/fx/tear.png", _fx[FX_TEAR]);
-  loadPng("/face/fx/zzz.png", _fx[FX_ZZZ]);
+  _fx[FX_TEAR] = loadLayerSprite("/face/fx/tear.png", false);
+  _fx[FX_ZZZ] = loadLayerSprite("/face/fx/zzz.png", false);
 
   _ready = true;
-  Serial.println("[layered-face] ready");
+  Serial.println("[layered-face] ready (pre-rasterized)");
 }
 
 LayeredFace::LayeredFace() : Face() {
@@ -96,46 +124,40 @@ LayeredFace::LayeredFace() : Face() {
 }
 
 LayeredFace::~LayeredFace() {
-  _base.clear();
-  for (int i = 0; i < EYE_COUNT; i++) _eyes[i].clear();
-  for (int i = 0; i < MOUTH_COUNT; i++) _mouths[i].clear();
-  for (int i = 0; i < BLUSH_COUNT; i++) _blush[i].clear();
-  for (int i = 0; i < FX_COUNT; i++) _fx[i].clear();
-  if (_composite) {
-    _composite->deleteSprite();
-    delete _composite;
-    _composite = nullptr;
-  }
+  freeSprite(_base);
+  for (int i = 0; i < EYE_COUNT; i++) freeSprite(_eyes[i]);
+  for (int i = 0; i < MOUTH_COUNT; i++) freeSprite(_mouths[i]);
+  for (int i = 0; i < BLUSH_COUNT; i++) freeSprite(_blush[i]);
+  for (int i = 0; i < FX_COUNT; i++) freeSprite(_fx[i]);
+  freeSprite(_composite);
 }
 
 void LayeredFace::ensureComposite(int w, int h) {
   if (_composite && _composite->width() == w && _composite->height() == h) return;
-  if (_composite) {
-    _composite->deleteSprite();
-    delete _composite;
-    _composite = nullptr;
-  }
+  freeSprite(_composite);
   _composite = new M5Canvas(&M5.Display);
   _composite->setPsram(true);
   _composite->setColorDepth(16);
   if (!_composite->createSprite(w, h)) {
-    Serial.printf("[layered-face] composite sprite %dx%d failed\n", w, h);
+    Serial.printf("[layered-face] composite %dx%d failed\n", w, h);
     delete _composite;
     _composite = nullptr;
+    return;
   }
-  _lastEye = -1;  // force rebuild
+  _lastEye = -1;
 }
 
-void LayeredFace::blitPng(const PngBuf& png) {
-  if (!_composite || !png.ok()) return;
-  // Prefer PNG (alpha layers); JPG for opaque base fallback.
-  if (!_composite->drawPng(png.data, png.size)) {
-    _composite->drawJpg(png.data, png.size);
+void LayeredFace::blitLayer(M5Canvas* layer, bool opaque) {
+  if (!_composite || !layer) return;
+  if (opaque) {
+    layer->pushSprite(_composite, 0, 0);
+  } else {
+    layer->pushSprite(_composite, 0, 0, kTrans);
   }
 }
 
 void LayeredFace::pickLayers(Expression e, float mouthOpen,
-                             EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx) const {
+                             EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx) {
   eye = EYE_CENTER;
   mouth = MOUTH_IDLE;
   blush = BLUSH_NONE;
@@ -173,31 +195,37 @@ void LayeredFace::pickLayers(Expression e, float mouthOpen,
       break;
   }
 
-  // Lipsync overrides mouth when speaking.
-  if (mouthOpen >= 0.55f) {
-    mouth = _mouths[MOUTH_OPEN2].ok() ? MOUTH_OPEN2 : MOUTH_O;
-  } else if (mouthOpen >= 0.15f) {
-    mouth = _mouths[MOUTH_OPEN1].ok() ? MOUTH_OPEN1 : MOUTH_O;
+  // Hysteresis so lipSync noise does not thrash rebuilds.
+  if (_mouthBand == 0) {
+    if (mouthOpen >= 0.22f) _mouthBand = 1;
+    if (mouthOpen >= 0.60f) _mouthBand = 2;
+  } else if (_mouthBand == 1) {
+    if (mouthOpen < 0.10f) _mouthBand = 0;
+    else if (mouthOpen >= 0.60f) _mouthBand = 2;
+  } else {
+    if (mouthOpen < 0.45f) _mouthBand = 1;
+    if (mouthOpen < 0.10f) _mouthBand = 0;
   }
+
+  if (_mouthBand == 2 && _mouths[MOUTH_OPEN2]) mouth = MOUTH_OPEN2;
+  else if (_mouthBand == 2 && _mouths[MOUTH_O]) mouth = MOUTH_O;
+  else if (_mouthBand == 1 && _mouths[MOUTH_OPEN1]) mouth = MOUTH_OPEN1;
+  else if (_mouthBand == 1 && _mouths[MOUTH_O]) mouth = MOUTH_O;
+  // band 0 keeps emotion mouth
 }
 
 void LayeredFace::rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx) {
-  if (!_composite) return;
-  _composite->fillSprite(TFT_BLACK);
-  blitPng(_base);
+  if (!_composite || !_base) return;
+  blitLayer(_base, true);
+  if (blush >= 0 && blush < BLUSH_COUNT) blitLayer(_blush[blush], false);
 
-  if (blush >= 0 && blush < BLUSH_COUNT) blitPng(_blush[blush]);
+  M5Canvas* eyeSpr = _eyes[eye] ? _eyes[eye] : _eyes[EYE_CENTER];
+  blitLayer(eyeSpr, false);
 
-  // Fall back to center eyes if selected missing.
-  const PngBuf* eyePng = &_eyes[eye];
-  if (!eyePng->ok()) eyePng = &_eyes[EYE_CENTER];
-  blitPng(*eyePng);
+  M5Canvas* mouthSpr = _mouths[mouth] ? _mouths[mouth] : _mouths[MOUTH_IDLE];
+  blitLayer(mouthSpr, false);
 
-  const PngBuf* mouthPng = &_mouths[mouth];
-  if (!mouthPng->ok()) mouthPng = &_mouths[MOUTH_IDLE];
-  blitPng(*mouthPng);
-
-  if (fx >= 0 && fx < FX_COUNT) blitPng(_fx[fx]);
+  if (fx >= 0 && fx < FX_COUNT) blitLayer(_fx[fx], false);
 
   _lastEye = eye;
   _lastMouth = mouth;
@@ -229,16 +257,22 @@ void LayeredFace::draw(DrawContext* ctx) {
     rebuild(eye, mouth, blush, fx);
   }
 
-  // Draw into Face sprite so balloon/effect/scale path matches stock Face.
-  sprite->setColorDepth(ctx->getColorDepth() == 1 ? 1 : 16);
+  // Prefer direct blit of cached composite — avoid per-frame PNG decode.
+  // Still draw balloon on a scratch face sprite when speech text is set.
+  const char* speech = ctx->getspeechText();
+  bool hasSpeech = speech && speech[0];
+
+  if (!hasSpeech && ctx->getScale() == 1.0f && ctx->getRotation() == 0) {
+    _composite->pushSprite(&M5.Display, boundingRect->getLeft(), boundingRect->getTop());
+    return;
+  }
+
   if (sprite->width() != w || sprite->height() != h) {
-    // initSprites should have created this; recreate if needed.
     sprite->deleteSprite();
     sprite->setColorDepth(16);
     sprite->createSprite(w, h);
   }
   _composite->pushSprite(sprite, 0, 0);
-
   g_balloon.draw(sprite, g_br, ctx);
   g_effect.draw(sprite, g_br, ctx);
 

@@ -36,3 +36,7 @@ Copy-to-SD/kids_tutor/
 # User-supplied music on SD (do not commit copyrighted MP3s)
 Copy-to-SD/app/AiStackChanEx/music/*.mp3
 Copy-to-SD/app/AiStackChanEx/music/*.MP3
+
+# Local secret dumps — never commit
+api.txt
+**/api.txt
