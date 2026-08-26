@@ -9,10 +9,17 @@
 #include "StackchanUI.h"
 #include "LearningManager.h"
 #include "TutorConfig.h"
+#include "Robot.h"
+#if defined(REALTIME_API)
+#include "llm/RealtimeLLMBase.h"
+#endif
 
 using namespace m5avatar;
 
-namespace m5avatar { extern volatile bool g_avatar_render_pause; }
+namespace m5avatar {
+extern volatile bool g_avatar_render_pause;
+extern volatile bool g_avatar_sd_paused;
+}
 
 extern Avatar avatar;
 
@@ -26,6 +33,9 @@ LearningManager g_learning;
 TutorEngine g_tutor;
 KidsTutorMod* g_kidsTutorMod = nullptr;
 bool g_math6Loaded = false;
+portMUX_TYPE g_voiceStartMux = portMUX_INITIALIZER_UNLOCKED;
+bool g_voiceStartPending = false;
+TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
 }
 
 KidsTutorMod::KidsTutorMod() {
@@ -36,6 +46,7 @@ KidsTutorMod::KidsTutorMod() {
 bool KidsTutorMod::ensureReady(String& errOut) {
   if (_engineReady) return true;
 
+  Serial.println("[kids] init: checking SD content");
   sd_bus_lock();
   bool hasRoot = SD.exists("/kids_tutor") || SD.exists("/kids_tutor/db");
   if (!hasRoot) {
@@ -55,9 +66,14 @@ bool KidsTutorMod::ensureReady(String& errOut) {
     return false;
   }
 
+  Serial.println("[kids] init: databases loaded");
   g_ui.begin();
+  Serial.println("[kids] init: voice settings");
   g_ui.beginVoice(SD);
-  if (!g_learning.begin(SD, g_englishDb, g_mathDb, g_curriculumDb)) {
+  sd_bus_lock();
+  bool learningReady = g_learning.begin(SD, g_englishDb, g_mathDb, g_curriculumDb);
+  sd_bus_unlock();
+  if (!learningReady) {
     errOut = "학습 설정을 읽지 못했어요.";
     return false;
   }
@@ -111,7 +127,9 @@ void KidsTutorMod::queuePendingSubject(TutorEngine::Subject subject) {
 void KidsTutorMod::init(void) {
   // Own the LCD while this mod is active (RoboEyes / avatar face off).
   g_avatar_render_pause = true;
-  delay(50);
+  uint32_t pauseStart = millis();
+  while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
+  Serial.println("[kids] init: avatar renderer paused");
 
   String err;
   if (!ensureReady(err)) {
@@ -161,6 +179,21 @@ void KidsTutorMod::btnC_pressed(void) {
   }
 }
 
+void KidsTutorMod::display_touched(int16_t x, int16_t y) {
+  // CoreS3 has no physical A/B/C buttons. Match the three on-screen controls:
+  // menu = Daily / English / Math, quiz = Previous / Submit / Next.
+  const int width = M5.Display.width();
+  if (width <= 0) return;
+  int section = (x * 3) / width;
+  if (section < 0) section = 0;
+  if (section > 2) section = 2;
+  Serial.printf("[kids] touch x=%d y=%d section=%d session=%d\n",
+                (int)x, (int)y, section, (int)_session);
+  if (section == 0) btnA_pressed();
+  else if (section == 1) btnB_pressed();
+  else btnC_pressed();
+}
+
 void KidsTutorMod::idle(void) {
   if (!_session) return;
   if (g_tutor.sessionComplete()) {
@@ -198,26 +231,55 @@ String kids_tutor_start_by_name(const char* name) {
   if (g_kidsTutorMod == nullptr) {
     return String("공부 모드가 없어요.");
   }
-  String err;
-  if (!g_kidsTutorMod->ensureReady(err)) {
-    return err;
-  }
 
   TutorEngine::Subject sub = map_subject_name(name ? String(name) : String());
-
-  ModBase* cur = get_current_mod();
-  if (cur && cur->getName() == "KidsTutor") {
-    g_kidsTutorMod->pause();
-    g_kidsTutorMod->queuePendingSubject(sub);
-    g_kidsTutorMod->init();
-  } else {
-    g_kidsTutorMod->queuePendingSubject(sub);
-    change_mod_named("KidsTutor");
-  }
+  // This function is called on the Realtime WebSocket task. Do not touch SD,
+  // display, audio, or ModManager here: RealtimeAiMod::pause() would suspend
+  // that same task in the middle of its WebSocket callback.
+  portENTER_CRITICAL(&g_voiceStartMux);
+  g_voiceStartSubject = sub;
+  g_voiceStartPending = true;
+  portEXIT_CRITICAL(&g_voiceStartMux);
+  Serial.println("[kids] voice start queued");
 
   const char* label = "데일리 10분";
   if (sub == TutorEngine::Subject::English) label = "영어 자유학습";
   else if (sub == TutorEngine::Subject::Math) label = "수학 자유학습";
   else if (sub == TutorEngine::Subject::Math6) label = "6세 수학";
-  return String(label) + "을 시작할게요.";
+  return String(label) + "을 준비할게요.";
+}
+
+void kids_tutor_process_pending() {
+  if (g_kidsTutorMod == nullptr) return;
+
+#if defined(REALTIME_API)
+  // Let the function-output follow-up response finish before pausing the
+  // Realtime mode. This also leaves the shared I2S audio state clean.
+  if (robot && robot->llm && ((RealtimeLLMBase*)robot->llm)->isSpeaking()) return;
+#endif
+
+  TutorEngine::Subject subject;
+  portENTER_CRITICAL(&g_voiceStartMux);
+  if (!g_voiceStartPending) {
+    portEXIT_CRITICAL(&g_voiceStartMux);
+    return;
+  }
+  subject = g_voiceStartSubject;
+  g_voiceStartPending = false;
+  portEXIT_CRITICAL(&g_voiceStartMux);
+
+  Serial.println("[kids] opening queued study program on main loop");
+  Serial.flush();
+  ModBase* cur = get_current_mod();
+  if (cur && cur->getName() == "KidsTutor") {
+    Serial.println("[kids] transition: restarting active tutor");
+    g_kidsTutorMod->pause();
+    g_kidsTutorMod->queuePendingSubject(subject);
+    g_kidsTutorMod->init();
+  } else {
+    Serial.printf("[kids] transition: current=%s -> KidsTutor\n",
+                  cur ? cur->getName().c_str() : "(none)");
+    g_kidsTutorMod->queuePendingSubject(subject);
+    change_mod_named("KidsTutor");
+  }
 }

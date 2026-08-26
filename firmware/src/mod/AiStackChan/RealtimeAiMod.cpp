@@ -40,7 +40,9 @@ RealtimeAiMod::RealtimeAiMod(bool _isOffline)
   : isOffline{_isOffline}
 {
   box_servo.setupBox(80, 120, 80, 80);
-  box_stt.setupBox(0, 0, M5.Display.width(), 60);
+  // Realtime conversation is the primary screen action: accept a tap anywhere
+  // on the face, rather than reserving a thin, invisible strip at the top.
+  box_stt.setupBox(0, 0, M5.Display.width(), M5.Display.height());
   box_BtnA.setupBox(0, 100, 40, 60);
   box_BtnC.setupBox(280, 100, 40, 60);
 
@@ -75,6 +77,17 @@ void RealtimeAiMod::init(void)
 
 void RealtimeAiMod::pause(void)
 {
+  // A direct mode change can arrive immediately after the function-call
+  // response.  Release the microphone / final audio buffer before suspending
+  // the WS task so the next mode never inherits an active I2S operation.
+  if (pRtLLM->isRealtimeRecording()) {
+    pRtLLM->stopRealtimeRecord();
+  }
+  uint32_t audioDrainStart = millis();
+  while (M5.Speaker.isPlaying() && millis() - audioDrainStart < 300) {
+    delay(1);
+  }
+  Serial.println("[realtime] pause: audio drained, suspending websocket task");
   avatar.set_isSubWindowEnable(false);
   pRtLLM->suspendWebSocketLoopTask();
   g_inAiMod = false;
@@ -129,17 +142,24 @@ void RealtimeAiMod::btnC_pressed(void)
 
 void RealtimeAiMod::display_touched(int16_t x, int16_t y)
 {
-  // 자는 중("잘자"/밤모드)이면 아무 곳이나 탭하면 깨어남(대화 토글은 다음 탭부터).
-  if (night_mode_is_night())
+  Serial.printf("[touch] RealtimeAi x=%d y=%d listen=%d recording=%d\n",
+                (int)x, (int)y, (int)box_stt.contain(x, y),
+                (int)pRtLLM->isRealtimeRecording());
+  // Only an explicit "sleep now" command blocks conversation. Scheduled night
+  // remains dim/sleepy but must still accept tap-to-talk.
+  if (night_mode_is_forced_sleep())
   {
     night_mode_force_sleep(false);   // 깨우기(스케줄 복귀 + 화면 밝게)
     sw_tone();
-    return;
   }
   if (box_stt.contain(x, y))
   {
     sw_tone();
     toggleRealtimeRecord();
+    Serial.printf("[realtime] recording=%d\n", (int)pRtLLM->isRealtimeRecording());
+    // box_stt intentionally covers the complete screen. Do not also invoke
+    // the legacy servo/QR hit boxes that overlap this conversation surface.
+    return;
   }
 #ifdef USE_SERVO
   if (box_servo.contain(x, y))
@@ -208,7 +228,7 @@ void RealtimeAiMod::idle(void)
   bool speaking = pRtLLM->isSpeaking();
   if (layered_face_active()) {
     // LayeredFace + avatar 말풍선으로 상태 표시. 립싱크는 lipSync 태스크가 mouthOpenRatio 갱신.
-    if (speaking || night_mode_is_sleeping()) {
+    if (speaking || night_mode_is_forced_sleep()) {
       // keep speech bubble free for captions / sleep face
     } else if (pRtLLM->isRealtimeRecording()) {
       avatar.setSpeechText("듣는 중...");
@@ -219,7 +239,7 @@ void RealtimeAiMod::idle(void)
     // 챗 모드 얼굴 = RoboEyes 눈. 상태표시(서브창 대체)는 녹음/발화 상태에서 도출.
     if (!roboeyes_view_qr_shown()) {
       if (speaking)                            roboeyes_view_set_status("");
-      else if (night_mode_is_sleeping())       roboeyes_view_set_status("");
+      else if (night_mode_is_forced_sleep())   roboeyes_view_set_status("");
       else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");
       else                                     roboeyes_view_set_status("터치하면 시작");
     }
@@ -275,7 +295,8 @@ void RealtimeAiMod::toggleRealtimeRecord(void)
 // 깨어나면 취침 전 상태대로 복구. idle() 에서 매 틱 호출.
 void RealtimeAiMod::nightListenGuard(void)
 {
-  bool sleeping = night_mode_is_sleeping();
+  // A scheduled night is visual-only; do not cancel a user-initiated turn.
+  bool sleeping = night_mode_is_forced_sleep();
 
   if (sleeping && !sleepHandled) {
     // 막 취침 진입: 녹음 중이었으면 멈추고 기억해둔다.

@@ -7,9 +7,10 @@
 #define WIFI_SPIFFS_PATH  "/wifi.json"
 
 int wifi_config_get_networks(String* ssidOut, String* pwdOut, int maxN) {
-    // SPIFFS may not be mounted yet this early in boot; mount idempotently.
-    if (!SPIFFS.begin(true)) {
-        Serial.println("[wifi-cfg] SPIFFS begin failed");
+    // Never format on a read path. Formatting here would silently erase the
+    // credentials that the setup portal saved whenever a mount briefly fails.
+    if (!SPIFFS.begin(false)) {
+        Serial.println("[wifi-cfg] SPIFFS mount failed (credentials preserved)");
         return 0;
     }
     if (!SPIFFS.exists(WIFI_SPIFFS_PATH)) {

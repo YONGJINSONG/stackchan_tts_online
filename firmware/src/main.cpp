@@ -49,6 +49,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiMulti.h>
+#include <esp_wifi.h>
 #include <ArduinoJson.h>
 #include <ArduinoYaml.h>   // YAMLDuino — re-read SC_SecConfig.yaml for wifi.networks[]
 #include "SpiRamJsonDocument.h"
@@ -367,6 +368,24 @@ void init_mic_spk()
 }
 
 // === Multi-network Wi-Fi (custom extension) ===========================================
+static void configureWifiCountryKR()
+{
+  // Keep the station scan range explicit for Korean 2.4 GHz networks
+  // (channels 1–13), including routers configured on channel 12 or 13.
+  esp_err_t result = esp_wifi_set_country_code("KR", false);
+  Serial.printf("[wifi] country=KR (2.4 GHz channels 1-13), result=%d\n", (int)result);
+}
+
+static void printSsidBytes(const char* label, const String& ssid)
+{
+  Serial.printf("[wifi] %s ssid='%s' length=%u bytes=", label, ssid.c_str(), (unsigned)ssid.length());
+  for (unsigned i = 0; i < ssid.length(); i++) {
+    Serial.printf("%02X", static_cast<unsigned char>(ssid[i]));
+    if (i + 1 < ssid.length()) Serial.print(':');
+  }
+  Serial.println();
+}
+
 // Reads `wifi.networks: [{ssid, password}, ...]` from /yaml/SC_SecConfig.yaml on the SD
 // card and lets WiFiMulti pick whichever AP is in range with the strongest signal.
 // This is how home/office auto-switching works without re-flashing. The stackchan-arduino
@@ -380,12 +399,92 @@ static bool tryMultiNetworkWifi()
     String ssids[WIFI_CFG_MAX_NETWORKS], pwds[WIFI_CFG_MAX_NETWORKS];
     int n = wifi_config_get_networks(ssids, pwds, WIFI_CFG_MAX_NETWORKS);
     if (n > 0) {
+      // Scan exactly as the setup portal does.  WiFiMulti occasionally misses
+      // a just-booted AP, while a connection pinned to the scan result's BSSID
+      // and channel is reliable (and also works for a hidden SSID).
+      int visible = WiFi.scanNetworks(false, true);
+      int matchedIndex = -1;
+      int matchedChannel = 0;
+      int matchedRssi = -127;
+      uint8_t matchedBssid[6] = {0};
+      for (int ap = 0; ap < visible; ap++) {
+        String scannedSsid = WiFi.SSID(ap);
+        for (int saved = 0; saved < n; saved++) {
+          if (scannedSsid == ssids[saved] && WiFi.RSSI(ap) > matchedRssi) {
+            matchedIndex = saved;
+            matchedChannel = WiFi.channel(ap);
+            matchedRssi = WiFi.RSSI(ap);
+            memcpy(matchedBssid, WiFi.BSSID(ap), sizeof(matchedBssid));
+          }
+        }
+      }
+      if (matchedIndex >= 0) {
+        Serial.printf("[multi-wifi] saved AP visible: %s channel=%d RSSI=%d; connecting directly\n",
+                      ssids[matchedIndex].c_str(), matchedChannel, matchedRssi);
+      } else {
+        Serial.printf("[multi-wifi] boot scan found %d AP(s), but none matched /wifi.json\n", visible);
+        for (int saved = 0; saved < n; saved++) {
+          printSsidBytes("saved", ssids[saved]);
+        }
+        for (int ap = 0; ap < visible; ap++) {
+          Serial.printf("[wifi] scan[%d] ssid='%s' channel=%d RSSI=%d\n",
+                        ap, WiFi.SSID(ap).c_str(), WiFi.channel(ap), WiFi.RSSI(ap));
+        }
+      }
+      WiFi.scanDelete();
+
+      if (matchedIndex >= 0) {
+        WiFi.disconnect(false, false);
+        delay(150);
+        WiFi.begin(ssids[matchedIndex].c_str(), pwds[matchedIndex].c_str(),
+                   matchedChannel, matchedBssid);
+        uint32_t bssidConnectStarted = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - bssidConnectStarted < 15000) {
+          delay(250);
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.printf("[multi-wifi] connected to scanned AP (SPIFFS): %s  IP=%s  RSSI=%d\n",
+                        WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+          return true;
+        }
+        Serial.printf("[multi-wifi] scanned AP connection failed (wl_status=%d)\n", WiFi.status());
+        WiFi.disconnect(false, false);
+        delay(150);
+      }
+
       for (int i = 0; i < n; i++) spiffsMulti.addAP(ssids[i].c_str(), pwds[i].c_str());
       Serial.printf("[multi-wifi] %d network(s) from /wifi.json — connecting (up to 15s)\n", n);
       if (spiffsMulti.run(15000) == WL_CONNECTED) {
         Serial.printf("[multi-wifi] connected (SPIFFS): %s  IP=%s  RSSI=%d\n",
                       WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
         return true;
+      }
+      Serial.println("[multi-wifi] WiFiMulti did not select a saved AP; trying each saved AP directly");
+
+      // WiFiMulti can report "no matching wifi found" during the first scan
+      // after boot even though the AP becomes visible a moment later. Retry
+      // every persisted network with the normal STA connection path before
+      // falling back to the older SD configuration or reopening the portal.
+      for (int i = 0; i < n; i++) {
+        Serial.printf("[multi-wifi] direct connect: %s\n", ssids[i].c_str());
+        WiFi.disconnect(false, false);
+        uint32_t disconnectStarted = millis();
+        while (WiFi.status() == WL_IDLE_STATUS && millis() - disconnectStarted < 1000) {
+          delay(20);
+        }
+        WiFi.begin(ssids[i].c_str(), pwds[i].c_str());
+        uint32_t connectStarted = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - connectStarted < 15000) {
+          delay(250);
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.printf("[multi-wifi] connected directly (SPIFFS): %s  IP=%s  RSSI=%d\n",
+                        WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+          return true;
+        }
+        Serial.printf("[multi-wifi] direct connect failed (wl_status=%d)\n", WiFi.status());
+        WiFi.disconnect(false, false);  // finish this attempt before the next WiFi.begin()
+        delay(100);
       }
       Serial.println("[multi-wifi] /wifi.json networks not in range — falling back to SD/YAML");
     }
@@ -451,6 +550,28 @@ static bool tryMultiNetworkWifi()
   return false;
 }
 
+#if !defined(ARDUINO_M5STACK_ATOMS3R)
+static bool mountSettingsSdCard()
+{
+  // Some CoreS3 cards are not ready immediately after an ESP.restart(),
+  // especially after upload/reset. Retry with progressively safer SPI clocks
+  // before treating the SD card as unavailable.
+  static const uint32_t frequencies[] = {25000000, 10000000, 4000000};
+  for (uint32_t frequency : frequencies) {
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      Serial.printf("[sd] mount attempt %d at %u Hz\n", attempt, (unsigned)frequency);
+      if (SD.begin(GPIO_NUM_4, SPI, frequency, "/sd", 12)) {
+        Serial.printf("[sd] mounted at %u Hz\n", (unsigned)frequency);
+        return true;
+      }
+      delay(300);
+    }
+  }
+  Serial.println("[sd] mount failed after retries");
+  return false;
+}
+#endif
+
 void setup()
 {
   auto cfg = M5.config();
@@ -499,20 +620,21 @@ void setup()
                                      "/SC_SecConfig.yaml", 2048,
                                      "/SC_BasicConfig.yaml", 2048);
 #else
-  if (SD.begin(GPIO_NUM_4, SPI, 25000000, "/sd", 12)) {
+  if (mountSettingsSdCard()) {
     // この関数ですべてのYAMLファイル(Basic, Secret, Extend)を読み込む
     system_config.loadConfig(SD, "/app/AiStackChanEx/SC_ExConfig.yaml");
 #endif
     // Wifi設定読み込み
     wifi_s* wifi_info = system_config.getWiFiSetting();
     Serial.printf("\nSSID: %s\n",wifi_info->ssid.c_str());
-    Serial.printf("Key: %s\n",wifi_info->password.c_str());
+    Serial.println("Key: [redacted]");
 
     // 前回設定で接続
     Serial.println("Connecting to WiFi");
     WiFi.disconnect();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
+    configureWifiCountryKR();
 
     // Multi-network first (home/office auto-switch). If that succeeds, we skip the
     // upstream NVS-then-single-ssid flow entirely.
@@ -585,7 +707,6 @@ void setup()
   mp3_init();
 
   //mod設定
-  init_mod();
 
 #if defined(ARDUINO_M5STACK_ATOMS3R)
 #if defined(CAT_FACE)
@@ -620,6 +741,10 @@ void setup()
   //avatar.init();
   avatar.init(16);
 #endif
+
+  // Active mods can take over the renderer, so start them only after the
+  // selected face and Avatar sprites are initialized.
+  init_mod();
 
   avatar.addTask(lipSync, "lipSync", 2048, 2);
   avatar.addTask(servo, "servo", 2048);
@@ -714,6 +839,7 @@ void loop()
   night_mode_tick();
   idle_talk_tick();   // proactive speech (kept on main loop for WS-write safety)
   checkUsageTimer();
+  kids_tutor_process_pending();  // defer Realtime function-call UI/SD work to this task
 
   ModBase* mod = get_current_mod();
   mod->idle();
@@ -757,24 +883,14 @@ void loop()
       int16_t dx = t.distanceX();
       int16_t dy = t.distanceY();
 
-      // Ignore small wobbles — they were stealing taps from listen (mode switch).
-      constexpr int16_t kMinFlick = 100;
-      if (abs(dx) >= kMinFlick && abs(dx) >= abs(dy))
+      if(abs(dx) >= abs(dy))
       {
-        Serial.printf("[touch] flick dx=%d -> change_mod\n", (int)dx);
         if(dx > 0){
           change_mod(true);
         }
         else{
           change_mod();
         }
-        Serial.printf("[mod] now: %s\n", get_current_mod()->getName().c_str());
-      }
-      else if (t.wasReleased())
-      {
-        // Short drag that didn't qualify as flick: still treat as tap.
-        Serial.printf("[touch] soft-flick as tap x=%d y=%d\n", (int)t.x, (int)t.y);
-        mod->display_touched(t.x, t.y);
       }
     }
     else if (t.wasReleased())

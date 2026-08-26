@@ -88,7 +88,11 @@ bool VoiceLite::loadSettings(const char* path) {
 
 bool VoiceLite::begin(fs::FS& fs, const char* configPath) {
   _fs=&fs; _inputReady=false; _audioReady=false; _lastError="";
-  if(!loadSettings(configPath)) return false;
+  // On CoreS3 the SD MISO/LCD control line is shared. Keep the display out
+  // of the bus while reading the local voice configuration and file list.
+  sd_bus_lock();
+  bool settingsLoaded = loadSettings(configPath);
+  if(!settingsLoaded) { sd_bus_unlock(); return false; }
   if(_settings.localAudio) {
     _fs->mkdir("/kids_tutor/audio"); _fs->mkdir(_settings.audioRoot);
     File dir=_fs->open(_settings.audioRoot);
@@ -98,6 +102,7 @@ bool VoiceLite::begin(fs::FS& fs, const char* configPath) {
       dir.close();
     }
   }
+  sd_bus_unlock();
   String m=_settings.inputMode; m.toLowerCase();
   if(m=="espsr") {
     _inputReady=_offline.begin(fs);

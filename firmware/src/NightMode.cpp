@@ -75,6 +75,10 @@ bool night_mode_is_sleeping() {
     return g_isNight;
 }
 
+bool night_mode_is_forced_sleep() {
+    return g_forceActive && g_forceSleep;
+}
+
 static void load_from_spiffs() {
     NightConfig c;
     if (SPIFFS.exists(NIGHT_SPIFFS_PATH)) {

@@ -10,6 +10,9 @@
 //       math/수학/소마 → Math; math6/6세 → Math6.
 // Returns a short Korean status string for Function Calling / TTS.
 String kids_tutor_start_by_name(const char* name);
+// Runs on the main loop after a Realtime function-call response finishes.
+// Keeping display/SD/mod changes out of the WebSocket task prevents a reset.
+void kids_tutor_process_pending();
 
 class KidsTutorMod : public ModBase {
 public:
@@ -20,6 +23,7 @@ public:
   void btnA_pressed(void) override;
   void btnB_pressed(void) override;
   void btnC_pressed(void) override;
+  void display_touched(int16_t x, int16_t y) override;
   void idle(void) override;
   bool isBusy(void) override;
 

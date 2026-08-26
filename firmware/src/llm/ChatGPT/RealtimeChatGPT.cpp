@@ -286,7 +286,11 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     M5.Speaker.end();
                     M5.Mic.begin();
                     exitMutexAudio();
-                    p_this->startRealtimeRecord();
+
+                    // Tap-to-talk mode: leave the microphone idle after each
+                    // completed response. Previously this immediately restarted
+                    // recording, so the next tap toggled that recording *off*
+                    // instead of starting the next turn.
 
                     for(int i=0; i<2; i++){
                         memset(p_this->audioBuf[i], 0, 100 * 1024);
@@ -316,6 +320,11 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 		case WStype_FRAGMENT_FIN:
  			Serial.printf("[WSc] payload: %s\n", payload);		
             break;
+		case WStype_PING:
+		case WStype_PONG:
+			// WebSocket keepalive frames. The library handles the reply; they are
+			// not Realtime API events and must not be reported as unknown errors.
+			break;
         default:
 			Serial.printf("[WSc] Unknown event\n");
             //Serial.printf("[WSc] payload: %s\n", payload);

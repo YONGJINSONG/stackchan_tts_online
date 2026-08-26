@@ -2,6 +2,8 @@
 
 void StackchanUI::begin() {
   // Host firmware already called M5.begin(); only claim the display here.
+  M5.Display.setFont(&fonts::efontKR_16);
+  M5.Display.setTextSize(1);
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Display.fillScreen(TFT_BLACK);
 #if TUTOR_ENABLE_SERVO
@@ -51,34 +53,52 @@ void StackchanUI::drawFace(FaceMood mood) {
   }
 }
 
-void StackchanUI::drawWrapped(const String& text, int x, int y, int maxChars, int lineHeight, int maxLines) {
-  int start = 0;
-  for (int line = 0; line < maxLines && start < (int)text.length(); ++line) {
-    int end = min(start + maxChars, (int)text.length());
-    if (end < (int)text.length()) {
-      int space = text.lastIndexOf(' ', end);
-      if (space > start + maxChars/2) end = space;
+void StackchanUI::drawWrapped(const String& text, int x, int y, int maxWidth, int lineHeight, int maxLines) {
+  int pos = 0;
+  const int length = text.length();
+  for (int line = 0; line < maxLines && pos < length; ++line) {
+    String part;
+    while (pos < length) {
+      uint8_t first = (uint8_t)text[pos];
+      int bytes = (first < 0x80) ? 1 : ((first & 0xE0) == 0xC0) ? 2 :
+                  ((first & 0xF0) == 0xE0) ? 3 : 4;
+      if (pos + bytes > length) bytes = 1;
+      String candidate = part + text.substring(pos, pos + bytes);
+      if (part.length() && M5.Display.textWidth(candidate) > maxWidth) break;
+      part = candidate;
+      pos += bytes;
     }
-    String part = text.substring(start, end);
     part.trim();
     M5.Display.drawString(part, x, y + line * lineHeight);
-    start = end;
-    while (start < (int)text.length() && text[start] == ' ') start++;
+    while (pos < length && text[pos] == ' ') pos++;
+  }
+}
+
+void StackchanUI::drawTouchFooter(bool quiz) {
+  const int w = M5.Display.width();
+  const int h = M5.Display.height();
+  const int top = h - 36;
+  const int third = w / 3;
+  const char* labels[3] = { quiz ? "이전" : "매일", quiz ? "정답" : "영어", quiz ? "다음" : "수학" };
+  M5.Display.fillRect(0, top, w, h - top, TFT_BLACK);
+  for (int i = 0; i < 3; i++) {
+    int left = i * third + 3;
+    int right = (i == 2) ? w - 3 : (i + 1) * third - 3;
+    M5.Display.drawRoundRect(left, top + 3, right - left, 29, 5, TFT_DARKGREY);
+    M5.Display.drawString(labels[i], left + 20, top + 10);
   }
 }
 
 void StackchanUI::showBootMenu(const String& learner, uint8_t age, bool math6yo) {
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString("STACK-CHAN KIDS TUTOR", 14, 16);
   M5.Display.setTextSize(1);
-  M5.Display.drawString(learner + "  AGE " + String(age), 20, 54);
-  M5.Display.drawString("A: DAILY 10 MIN", 20, 82);
-  M5.Display.drawString("B: English free", 20, 108);
-  M5.Display.drawString(math6yo ? "C: Math 6yo" : "C: Math free", 20, 134);
-  String v = "AUDIO:" + String(localAudioReady() ? "LOCAL" : "TONE") + "  INPUT:" + voiceModeLabel();
-  M5.Display.drawString(v, 20, 168);
-  M5.Display.drawString("Quiz: A prev / B OK / C next", 10, 205);
+  M5.Display.drawString("KIDS TUTOR", 10, 10);
+  M5.Display.drawString(learner + "  " + String(age) + "세", 10, 36);
+  M5.Display.drawString("화면 아래를 눌러 과목을 골라요", 10, 66);
+  M5.Display.drawString(math6yo ? "수학: 6세 과정" : "수학: 자유 학습", 10, 94);
+  M5.Display.drawString(localAudioReady() ? "소리: 로컬" : "소리: 기본", 10, 122);
+  M5.Display.drawString("문제: 이전 · 정답 · 다음", 10, 150);
+  drawTouchFooter(false);
 }
 
 void StackchanUI::showStatusLine(const String& subject, uint8_t level, uint32_t stars) {
@@ -94,41 +114,52 @@ void StackchanUI::showQuestion(const Question& q, const std::vector<String>& cho
   M5.Display.fillScreen(TFT_BLACK);
   showStatusLine(subject, level, stars);
 
+  // CoreS3 shares the SD MISO pin with LCD control. drawPngFile reads SD while
+  // writing the panel and can reset the device, so use the reliable text layout
+  // there. Other boards retain image questions.
+#if defined(ARDUINO_M5STACK_CORES3)
+  const bool hasImage = false;
+#else
   const bool hasImage = _fs && q.image.length() && _fs->exists(q.image);
+#endif
+  const int footerTop = M5.Display.height() - 36;
   int textY = 34;
-  int questionLines = 5;
-  int choiceY = 132;
+  int questionLines = 4;
+  int choiceY = 108;
+  int choiceHeight = 22;
   if (hasImage) {
-    const int imgMax = 112;
+    const int imgMax = 60;
     const int imgX = (M5.Display.width() - imgMax) / 2;
     // M5GFX on this PlatformIO pinout expects a path (SD), not fs::FS& + path.
     M5.Display.drawPngFile(q.image.c_str(), imgX, 26, imgMax, imgMax);
-    textY = 142;
+    textY = 96;
     questionLines = 2;
-    choiceY = 176;
+    choiceY = 132;
+    choiceHeight = 17;
   }
 
-  drawWrapped(q.question, 8, textY, 38, 16, questionLines);
+  drawWrapped(q.question, 8, textY, M5.Display.width() - 16, 16, questionLines);
   int y = choiceY;
   for (size_t i = 0; i < choices.size() && i < 4; ++i) {
     if ((int)i == selected) {
-      M5.Display.fillRoundRect(4, y-2, M5.Display.width()-8, 18, 4, TFT_DARKGREY);
+      M5.Display.fillRoundRect(4, y-2, M5.Display.width()-8, choiceHeight, 4, TFT_DARKGREY);
       M5.Display.setTextColor(TFT_YELLOW, TFT_DARKGREY);
     } else {
       M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     }
-    M5.Display.drawString(String(i+1) + ". " + choices[i], 10, y);
-    y += hasImage ? 16 : 24;
+    drawWrapped(String(i+1) + ". " + choices[i], 10, y, M5.Display.width() - 20, 16, 1);
+    y += choiceHeight;
   }
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  if (y < footerTop) M5.Display.fillRect(0, y, M5.Display.width(), footerTop - y, TFT_BLACK);
+  drawTouchFooter(true);
 }
 
 void StackchanUI::showMessage(const String& title, const String& body) {
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextSize(2);
-  M5.Display.drawString(title, 10, 30);
   M5.Display.setTextSize(1);
-  drawWrapped(body, 10, 80, 38, 20, 7);
+  M5.Display.drawString(title, 10, 20);
+  drawWrapped(body, 10, 58, M5.Display.width() - 20, 18, 7);
 }
 
 void StackchanUI::showListening() {

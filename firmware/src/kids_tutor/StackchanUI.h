@@ -46,5 +46,6 @@ private:
   StackchanSERVO _servo;
   bool _servoReady = false;
 #endif
-  void drawWrapped(const String& text, int x, int y, int maxChars, int lineHeight, int maxLines);
+  void drawWrapped(const String& text, int x, int y, int maxWidth, int lineHeight, int maxLines);
+  void drawTouchFooter(bool quiz);
 };

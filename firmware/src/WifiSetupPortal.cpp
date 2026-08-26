@@ -16,6 +16,8 @@ constexpr byte DNS_PORT = 53;
 DNSServer dnsServer;
 ESP32WebServer portal(80);
 bool g_saved = false;
+String g_savedSsid;
+String g_savedPassword;
 
 String jsonEscape(const String& s) {
   String o;
@@ -128,10 +130,12 @@ void handleRoot() {
 
 void handleSave() {
   String body = portal.arg("plain");
+  String ssid;
+  String pwd;
   if (body.length() == 0) {
     // form-urlencoded fallback
-    String ssid = portal.arg("ssid");
-    String pwd = portal.arg("password");
+    ssid = portal.arg("ssid");
+    pwd = portal.arg("password");
     if (ssid.length() == 0) {
       portal.send(400, "text/plain", "ssid required");
       return;
@@ -145,14 +149,16 @@ void handleSave() {
       portal.send(400, "text/plain", "invalid JSON");
       return;
     }
-    const char* ssid = in["ssid"] | "";
-    const char* pwd = in["password"] | "";
-    if (!ssid || !*ssid) {
+    const char* inputSsid = in["ssid"] | "";
+    const char* inputPwd = in["password"] | "";
+    if (!inputSsid || !*inputSsid) {
       portal.send(400, "text/plain", "ssid required");
       return;
     }
-    body = String("{\"networks\":[{\"ssid\":\"") + jsonEscape(String(ssid))
-         + "\",\"password\":\"" + jsonEscape(String(pwd)) + "\"}]}";
+    ssid = String(inputSsid);
+    pwd = String(inputPwd);
+    body = String("{\"networks\":[{\"ssid\":\"") + jsonEscape(ssid)
+         + "\",\"password\":\"" + jsonEscape(pwd) + "\"}]}";
   }
 
   if (!SPIFFS.begin(true)) {
@@ -163,6 +169,17 @@ void handleSave() {
     portal.send(500, "text/plain", "save failed");
     return;
   }
+
+  // Keep a second copy in the ESP32 Wi-Fi NVS. The regular boot path tries NVS
+  // before falling back to the portal, so this also recovers from a damaged or
+  // temporarily unavailable SPIFFS filesystem.
+  g_savedSsid = ssid;
+  g_savedPassword = pwd;
+  WiFi.persistent(true);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.begin(g_savedSsid.c_str(), g_savedPassword.c_str());
+  Serial.printf("[wifi-portal] credentials saved to SPIFFS + NVS (SSID=%s)\n",
+                g_savedSsid.c_str());
   portal.send(200, "text/plain; charset=utf-8", "ok");
   g_saved = true;
 }
@@ -193,7 +210,9 @@ void wifi_setup_portal_run(void) {
   Serial.println("[wifi-portal] starting SoftAP StackChan-Setup");
   g_saved = false;
 
-  WiFi.disconnect(true, true);
+  // Do not erase STA credentials when opening the recovery portal. Erasing
+  // them made every failed connection attempt destroy the only NVS fallback.
+  WiFi.disconnect(false, false);
   delay(100);
   WiFi.mode(WIFI_AP);
   // Open SoftAP — phone joins without a password.

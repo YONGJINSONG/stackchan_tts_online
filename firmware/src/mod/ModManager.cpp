@@ -54,20 +54,37 @@ ModBase* change_mod_named(const char* name)
   if (name == nullptr || name[0] == '\0' || modList.empty()) return get_current_mod();
   if (modList[0]->getName() == name) return modList[0];
 
+  // Find the requested mod first.  The old implementation called pause() on
+  // every mod it passed while rotating the deque.  That means a direct jump
+  // from Realtime to KidsTutor also ran the inactive photo-frame cleanup
+  // (timers/SD state) and other side effects during one transition.
+  ModBase* target = nullptr;
   const size_t n = modList.size();
   for (size_t i = 0; i < n; i++) {
-    ModBase* cur = modList[0];
-    cur->pause();
-    modList.pop_front();
-    modList.push_back(cur);
-    if (modList[0]->getName() == name) {
-      avatar.setFaceOffsetX(0);
-      modList[0]->init();
-      return modList[0];
+    if (modList[i]->getName() == name) {
+      target = modList[i];
+      break;
     }
   }
-  Serial.printf("[mod] change_mod_named: '%s' not found\n", name);
+  if (target == nullptr) {
+    Serial.printf("[mod] change_mod_named: '%s' not found\n", name);
+    return modList[0];
+  }
+
+  ModBase* outgoing = modList[0];
+  Serial.printf("[mod] transition %s -> %s: pausing active mod\n",
+                outgoing->getName().c_str(), target->getName().c_str());
+  outgoing->pause();
+
+  while (modList[0] != target) {
+    ModBase* cur = modList[0];
+    modList.pop_front();
+    modList.push_back(cur);
+  }
+
   avatar.setFaceOffsetX(0);
+  Serial.printf("[mod] transition %s -> %s: initializing target\n",
+                outgoing->getName().c_str(), modList[0]->getName().c_str());
   modList[0]->init();
   return modList[0];
 }

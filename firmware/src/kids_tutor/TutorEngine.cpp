@@ -1,4 +1,5 @@
 #include "TutorEngine.h"
+#include "share/SdBus.h"
 #include "TutorConfig.h"
 #include <algorithm>
 #include <vector>
@@ -206,12 +207,13 @@ bool TutorEngine::finishDailyIfNeeded() {
 bool TutorEngine::loadNext() {
   if (finishDailyIfNeeded()) return false;
 
+  bool loaded = false;
+  // SD reads must be isolated from the CoreS3 LCD bus. Rendering happens only
+  // after this lock is released below.
+  sd_bus_lock();
   if (_subject == Subject::Daily && _learning) {
     String oldId = _current.id;
-    if (!_learning->nextDailyQuestion(_level, oldId, _current, _currentEnglish, _currentIsReview, _dailyPhaseLabel)) {
-      if (_learning->sessionExpired()) return !finishDailyIfNeeded();
-      return false;
-    }
+    loaded = _learning->nextDailyQuestion(_level, oldId, _current, _currentEnglish, _currentIsReview, _dailyPhaseLabel);
   } else {
     QuestionDB* db = nullptr;
     if (_subject == Subject::English) { db = _english; _currentEnglish = true; }
@@ -223,9 +225,15 @@ bool TutorEngine::loadNext() {
       _mixedEnglishNext = !_mixedEnglishNext;
     }
     _currentIsReview = false;
-    if (!db) return false;
-    String oldId = _current.id;
-    if (!db->randomByLevel(_level, _current, oldId)) return false;
+    if (db) {
+      String oldId = _current.id;
+      loaded = db->randomByLevel(_level, _current, oldId);
+    }
+  }
+  sd_bus_unlock();
+  if (!loaded) {
+    if (_subject == Subject::Daily && _learning && _learning->sessionExpired()) return !finishDailyIfNeeded();
+    return false;
   }
 
   _wrong = 0;
