@@ -1,6 +1,11 @@
+#include <Arduino.h>
+
+// AI 대화 모드 활성 여부.
+// REALTIME_API를 사용하지 않는 빌드에서는 항상 false 상태로 존재해야 함.
+volatile bool g_inAiMod = false;
+
 #if defined(REALTIME_API)
 
-#include <Arduino.h>
 #include <deque>
 #include <SD.h>
 #include <SPIFFS.h>
@@ -15,7 +20,8 @@
 #include "Sfx.h"
 #include "share/SDUtil.h"
 #include "Gesture.h"
-#include "face/RoboEyesView.h"   // 챗 모드 얼굴 = RoboEyes 눈
+#include "face/RoboEyesView.h"   // 챗 모드 얼굴 = RoboEyes 눈 (LayeredFace 없을 때)
+#include "face/LayeredFace.h"
 #include "NightMode.h"           // 탭하면 깨어나기(자는 중 판정/해제)
 
 using namespace m5avatar;
@@ -53,7 +59,6 @@ RealtimeAiMod::RealtimeAiMod(bool _isOffline)
 // True only while the AI conversation mod is the active mod. Touch "쓰담"/gaze
 // follow and proactive idle-talk are gated on this so swipes used to navigate
 // other modes (photo frame) don't get misread as petting → spurious speech.
-volatile bool g_inAiMod = false;
 
 void RealtimeAiMod::init(void)
 {
@@ -61,10 +66,11 @@ void RealtimeAiMod::init(void)
   avatar.set_isSubWindowEnable(true);
   pRtLLM->resumeWebSocketLoopTask();
   g_inAiMod = true;
-  // 챗 모드 얼굴을 RoboEyes 눈으로 — 아바타 얼굴 렌더를 멈추고 눈을 띄운다.
-  // 표정은 avatar.getExpression()(set_avatar_expression 등) 을 RoboEyesView 가 매 프레임 반영.
-  roboeyes_view_begin();
-  roboeyes_view_take();
+  // SD LayeredFace가 있으면 아바타 얼굴 유지. 없으면 RoboEyes로 화면 점유.
+  if (!layered_face_active()) {
+    roboeyes_view_begin();
+    roboeyes_view_take();
+  }
 }
 
 void RealtimeAiMod::pause(void)
@@ -72,7 +78,10 @@ void RealtimeAiMod::pause(void)
   avatar.set_isSubWindowEnable(false);
   pRtLLM->suspendWebSocketLoopTask();
   g_inAiMod = false;
-  roboeyes_view_release();   // 화면 반납 → 아바타 얼굴 렌더 재개(다른 모드용)
+  if (!layered_face_active()) {
+    roboeyes_view_release();   // 화면 반납 → 아바타 얼굴 렌더 재개(다른 모드용)
+  }
+  avatar.setSpeechText("");
 }
 
 
@@ -97,6 +106,18 @@ void RealtimeAiMod::btnB_longPressed(void)
 
 void RealtimeAiMod::btnC_pressed(void)
 {
+  if (layered_face_active()) {
+    // LayeredFace: 말풍선에 설정 URL 토글.
+    static bool showUrl = false;
+    showUrl = !showUrl;
+    if (showUrl) {
+      String url = String("http://") + WiFi.localIP().toString();
+      avatar.setSpeechText(url.c_str());
+    } else {
+      avatar.setSpeechText("");
+    }
+    return;
+  }
   // QR(설정 페이지 IP 안내)을 눈 화면에 합성 — 서브창 대신 RoboEyesView 사용.
   if(!roboeyes_view_qr_shown()){
     String url = String("http://") + WiFi.localIP().toString();
@@ -184,18 +205,27 @@ void RealtimeAiMod::idle(void)
 
   sfx_pump();   // 음성 play_sound 로 큐된 효과음을 발화 끝난 뒤 재생
 
-  // 챗 모드 얼굴 = RoboEyes 눈. 상태표시(서브창 대체)는 녹음/발화 상태에서 도출.
   bool speaking = pRtLLM->isSpeaking();
-  if (!roboeyes_view_qr_shown()) {
-    if (speaking)                            roboeyes_view_set_status("");           // 발화 중엔 눈으로 표현
-    else if (night_mode_is_sleeping())       roboeyes_view_set_status("");           // 자는 중엔 상태문구 숨김(눈 감김)
-    else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");
-    else                                     roboeyes_view_set_status("터치하면 시작");
+  if (layered_face_active()) {
+    // LayeredFace + avatar 말풍선으로 상태 표시. 립싱크는 lipSync 태스크가 mouthOpenRatio 갱신.
+    if (speaking || night_mode_is_sleeping()) {
+      // keep speech bubble free for captions / sleep face
+    } else if (pRtLLM->isRealtimeRecording()) {
+      avatar.setSpeechText("듣는 중...");
+    } else {
+      avatar.setSpeechText("터치하면 시작");
+    }
+  } else {
+    // 챗 모드 얼굴 = RoboEyes 눈. 상태표시(서브창 대체)는 녹음/발화 상태에서 도출.
+    if (!roboeyes_view_qr_shown()) {
+      if (speaking)                            roboeyes_view_set_status("");
+      else if (night_mode_is_sleeping())       roboeyes_view_set_status("");
+      else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");
+      else                                     roboeyes_view_set_status("터치하면 시작");
+    }
+    roboeyes_view_set_talk(speaking ? (pRtLLM->getAudioLevel() / 12000.0f) : 0.0f);
+    roboeyes_view_render();
   }
-  // 말하는 눈: 발화 중 오디오 레벨(0~15000)을 0~1로 정규화해 전달(입 대체 미세 진동)
-  roboeyes_view_set_talk(speaking ? (pRtLLM->getAudioLevel() / 12000.0f) : 0.0f);
-
-  roboeyes_view_render();   // 30fps, sd_pause 중엔 스킵
 }
 
 void RealtimeAiMod::alarmEventHandler()

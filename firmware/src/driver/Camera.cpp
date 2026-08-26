@@ -5,8 +5,10 @@
 #include <Avatar.h>
 #include "Camera.h"
 #include <SPIFFS.h>
+#include <SD.h>
 #include <base64.h>
 #include "DebugTools.h"
+#include "share/SdBus.h"
 using namespace m5avatar;
 extern Avatar avatar;
 
@@ -234,6 +236,49 @@ bool camera_capture_base64(String& out)
   free(jpg_buf);
   jpg_buf = NULL;
   
+  return true;
+}
+
+
+bool camera_capture_save_sd(String& outPath)
+{
+  M5.In_I2C.release();
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera Capture Failed");
+    return false;
+  }
+
+  size_t jpg_buf_len = 0;
+  uint8_t *jpg_buf   = NULL;
+  bool jpeg_converted = frame2jpg(fb, 80, &jpg_buf, &jpg_buf_len);
+  esp_camera_fb_return(fb);
+  if (!jpeg_converted) {
+    Serial.println("JPEG compression failed");
+    return false;
+  }
+
+  sd_bus_lock();
+  SD.mkdir("/app");
+  SD.mkdir("/app/AiStackChanEx");
+  SD.mkdir("/app/AiStackChanEx/photos");
+  String path = String("/app/AiStackChanEx/photos/") + String(millis()) + ".jpg";
+  File f = SD.open(path.c_str(), FILE_WRITE);
+  bool ok = false;
+  if (f) {
+    size_t wrote = f.write(jpg_buf, jpg_buf_len);
+    f.close();
+    ok = (wrote == jpg_buf_len);
+  }
+  sd_bus_unlock();
+  free(jpg_buf);
+
+  if (!ok) {
+    Serial.println("[camera] SD write failed");
+    return false;
+  }
+  outPath = path;
+  Serial.printf("[camera] saved %s (%d bytes)\n", path.c_str(), (int)jpg_buf_len);
   return true;
 }
 

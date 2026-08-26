@@ -4,6 +4,7 @@
 #include "tts/OpenAITTS.h"
 #include "tts/UAquesTalkTTS.h"
 #include "tts/ModuleLLMTTS.h"
+#include "tts/GoogleCloudTTS.h"
 #include "stt/CloudSpeechClient.h"
 #include "stt/Whisper.h"
 #include "stt/ModuleLLMASR.h"
@@ -262,6 +263,9 @@ void Robot::initTTS(StackchanExConfig& config){
     Serial.println("ModuleLLM is not enabled. Please setup in platformio.ini");
     tts = nullptr;
 #endif
+    break;
+  case TTS_TYPE_GOOGLE_CLOUD:
+    tts = new GoogleCloudTTS(tts_param);
     break;
   default:
     Serial.printf("Error: undefined TTS type %d\n", tts_type);

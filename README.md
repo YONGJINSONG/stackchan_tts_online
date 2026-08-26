@@ -1,113 +1,132 @@
-# stack-chan-ko — 한국판 스택짱
+# StackChan Multifunction Assistant
 
-M5Stack **CoreS3** 위에서 동작하는 **한국어 가족용 AI 로봇** 펌웨어입니다. OpenAI Realtime API로 자연스러운 한국어 음성 대화를 하고, 도형 기반의 부드러운 눈(RoboEyes)으로 감정을 표현하며, 날씨·미세먼지·급식·할일·일정 같은 실생활 정보를 음성으로 알려줍니다.
+M5Stack CoreS3 (ESP32-S3) 기반 아동용 멀티기능 스택챤 어시스턴트.
+캐스케이드 음성 파이프라인(Whisper → GPT-4o mini → Google Cloud TTS)과 Function Calling 의도 라우팅 위에
+챗봇 대화, 사진/사물 인식, SD카드 콘텐츠 재생, 인터넷 검색, 사용 시간 타이머를 올린다.
 
-[Stack-chan](https://github.com/meganetaaan/stack-chan) 프로젝트와 [AI_StackChan_Ex](https://github.com/ronron-gh/AI_StackChan_Ex)(motoh) 펌웨어를 기반으로, 한국어 사용과 가족용 생활 기능에 맞춰 포크·커스터마이즈했습니다.
+[stack-chan-ko](https://github.com/lovida8254/stack-chan-ko)(한국판 스택짱)를 포크해 베이스로 삼았다.
+RoboEyes 표정·서보 제스처·한국어 웹 설정 페이지·한국 생활 데이터 연동·웨이크워드는
+베이스에서 가져왔고, 음성 경로는 비용 때문에 OpenAI Realtime 대신 캐스케이드를 기본으로 둔다.
 
-> 개인용 가족 프로젝트를 일반화해 공개한 것입니다. 가족 이름·학교·지역 등 개인정보는 모두 일반 템플릿(설정값)으로 대체되어 있으니, 아래 안내대로 본인 환경에 맞게 채워 사용하세요.
+## 벤더 클라우드를 두지 않는다
 
-## 데모
+기기가 OpenAI·Google API를 **직접** 호출한다. 중간에 벤더 백엔드(xiaozhi.me 같은)를 두지 않는다.
+[warble](https://github.com/rebelthor/warble)이 제기한 문제 — 로봇이 특정 회사 서버에 묶이고
+계정이 살아 있어야만 동작하는 구조 — 를 애초에 만들지 않는다는 뜻이다.
+warble의 PC 로컬 백엔드(whisper.cpp + Ollama + Piper)는 **넣지 않는다**.
+API 키는 SD카드의 `Copy-to-SD/yaml/SC_SecConfig.yaml`에 본인이 넣고 본인이 소유하며,
+저장소에는 `********` 템플릿만 들어간다.
 
-<p align="center">
-  <img src="images/demo/roboeyes_faces.png" width="560" alt="RoboEyes 도형 눈 — 기본 / 기쁨 표정">
-</p>
-<p align="center">
-  <em>FluxGarage RoboEyes 기반 도형 눈 — 감정에 따라 표정이 바뀝니다 (기본 · 기쁨 · 슬픔 · 화남 · 의심 · 졸림).</em>
-</p>
+대신 클라우드 API 사용료는 발생한다. 캐스케이드 기준 추산은
+`docs/stackchan_voice_pipeline_design.md`에 정리되어 있다.
 
-<p align="center">
-  <img src="images/demo/settings_ui.png" width="300" alt="한국어 통합 웹 설정 페이지">
-</p>
-<p align="center">
-  <em>폰/PC 브라우저로 여는 한국어 통합 설정 페이지 — 페르소나·기억·발화·예약·머리조작·움직임·센서·효과음·밤모드·WiFi를 한 곳에서.</em>
-</p>
-
-> 위 눈 이미지는 펌웨어와 동일한 지오메트리(320×240, 청록 둥근 눈)로 렌더한 것입니다. 실물 기기 정면 사진과 동작 GIF는 추후 추가 예정.
+저지연이 필요하면 `m5stack-cores3-realtime`으로 Realtime API를 쓸 수 있다. 기본 빌드는 아니다.
 
 ---
 
-## 주요 기능
+## 저장소 구조
 
-- **한국어 음성 대화** — OpenAI Realtime API. 항상 한국어로만 응답하도록 페르소나가 고정.
-- **RoboEyes 도형 눈** — 카툰 캐릭터가 아니라 [FluxGarage RoboEyes](https://github.com/FluxGarage/RoboEyes) 기반의 부드러운 도형 눈(EMO/Luna 스타일). 6감정 표정 + 말하는 눈 + 시선 + 수면 눈.
-- **감정 합주** — 표정 변화에 맞춰 서보(목)가 제스처. 기쁨/슬픔/화남/의심/졸림/평온.
-- **페르소나 프리셋** — 기본/여자친구/친구/비서. 웹 설정에서 즉시 전환·편집.
-- **장기 기억** — `update_memory` 도구로 새로 알게 된 사실을 누적 저장, 다음 대화에서도 기억.
-- **외부 데이터 도구** — 날씨(wttr.in), 미세먼지, 학교 급식(NEIS), 할일·일정([Nexusive](https://nexusive.com)). 아래 *외부 연동* 참조.
-- **머리 모션 레코더** — 웹 조이스틱으로 목을 실시간 조작·녹화·재생, 효과음과 동시 재생 연동.
-- **효과음 라이브러리** — SD의 mp3를 이름/이벤트(감정·쓰담·근접·부팅·알람 등)에 매핑. 음성으로도 재생.
-- **생명감 기능** — 혼자 움직임, 근접센서(가까이 가면 눈 커짐), 먼저 말 걸기, 쓰담 반응, 밤 모드, 탭하면 깨어나기.
-- **예약·알람** — 취침/기상/아침 인사 등 시간 예약 발화 + 알람 소리.
-- **통합 웹 설정** — 단일 `settings.html`에서 페르소나·기억·발화·볼륨·움직임·센서·밤모드·WiFi 전부 설정.
-
-## 하드웨어
-
-- **M5Stack CoreS3** (ESP32-S3) — 메인 타깃.
-- 팬틸트 서보(목). 서보 종류는 SD 설정에서 지정.
-- (선택) 스피커/마이크는 CoreS3 내장 사용.
-
-> 다른 보드(Core2, AtomS3R)용 빌드 환경도 `platformio.ini`에 있으나, 이 포크의 기능은 **CoreS3 기준으로 검증**되었습니다.
-
-## 빌드 & 플래시
-
-[PlatformIO](https://platformio.org/) 필요. `firmware/` 디렉토리에서:
-
-```bash
-# 빌드
-pio run -e m5stack-cores3-realtime
-
-# 빌드 + 플래시 (포트는 본인 환경에 맞게)
-pio run -e m5stack-cores3-realtime -t upload --upload-port COM3
+```
+stackchan_project/
+├── firmware/            펌웨어 (PlatformIO, Arduino framework) — stack-chan-ko 베이스
+│   ├── src/             본체 소스 (llm/ stt/ tts/ kids_tutor/ face/ driver/ mod/ ...)
+│   ├── lib/             RoboEyes, m5stack-avatar 등 벤더링된 라이브러리
+│   ├── incbin/          펌웨어에 구워지는 한국어 웹 설정 페이지
+│   └── platformio.ini   보드별 빌드 환경
+├── Copy-to-SD/          SD카드 루트에 복사할 설정 파일 (WiFi/API키/하드웨어/기능 옵션)
+├── doc/                 베이스 프로젝트 문서 (기능별 사용법, upstream README)
+├── docs/                이 프로젝트의 설계 문서
+│   ├── stackchan_voice_pipeline_design.md   음성 파이프라인 아키텍처·비용 산정
+│   ├── stackchan_multifunction_design.md    6개 기능 전체 설계, 얼굴 등록 흐름
+│   ├── stackchan_function_schemas.json      Function Calling tool 스키마
+│   └── legacy-src/      포크 이전에 작성한 프로토타입 (이식 대상, 빌드되지 않음)
+├── images/              데모 이미지
+├── LICENSE              GPL-3.0-or-later
+├── NOTICE.md            서드파티 저작권 고지
+└── UPSTREAM.md          업스트림 관계와 동기화 방법
 ```
 
-> Windows에서 긴 앱 영역 쓰기 중 USB 절전으로 플래시가 끊기면, USB 선택적 절전(selective suspend)을 끄고 다시 시도하세요.
+---
 
-## SD 카드 설정
+## 빌드
 
-`Copy-to-SD/` 폴더 내용을 SD 카드 루트에 복사한 뒤, 아래 파일을 본인 값으로 채웁니다.
+PlatformIO Core가 필요하다 (`pip install -U platformio`).
+툴체인·패키지를 C:가 아닌 곳에 두려면 `PLATFORMIO_CORE_DIR`을 지정한다 (예: `F:\.platformio`).
 
-- **`yaml/SC_SecConfig.yaml`** — WiFi와 API 키 (실제 키는 SD에만 두고 절대 커밋하지 마세요. 저장소의 파일은 `********` 템플릿입니다.)
-  ```yaml
-  wifi:
-    ssid: "your-wifi"
-    password: "your-password"
-  apikey:
-    aiservice: "sk-..."     # OpenAI API Key
-    nexusive: "nex_..."     # (선택) Nexusive 연동용
-  ```
-- **`yaml/SC_BasicConfig.yaml`** — 서보 종류/핀 등 하드웨어 설정.
-- **`app/AiStackChanEx/SC_ExConfig.yaml`** — 기능 옵션.
+```bash
+cd firmware
 
-## 지역·학교 정보 변경 (중요)
+# 기본: 캐스케이드 (Whisper → GPT-4o mini → Google Cloud TTS)
+python -m platformio run -e m5stack-cores3
 
-날씨·미세먼지·급식은 **예시값**으로 들어 있어, 본인 지역/학교로 바꿔야 정상 동작합니다. `firmware/src/llm/ChatGPT/FunctionCall.cpp`:
+# 빌드 + 플래시 (포트는 환경에 맞게)
+python -m platformio run -e m5stack-cores3 -t upload --upload-port COM3
+```
 
-- **날씨** — `do_fetch_weather()`의 `wttr.in/Seoul` → 본인 도시명.
-- **미세먼지** — `do_fetch_air()`의 `stationName=` → 본인 측정소명(URL 인코딩).
-- **급식** — `do_fetch_meals_week()`의 NEIS `ATPT_OFCDC_SC_CODE`(시도교육청)·`SD_SCHUL_CODE`(학교) → 본인 학교 코드. 코드는 [NEIS 오픈API](https://open.neis.go.kr)에서 조회.
+카메라가 필요한 기능(사진 저장·사물 인식)은 `m5stack-cores3-camera` 환경을 쓴다.
+CoreS3에서 카메라 SCCB가 근접센서·IMU·전원·터치와 내부 I2C 버스를 공유하며,
+**공존이 아직 검증되지 않았다**. 이 환경은 실기 실험용으로 취급한다.
 
-각 위치에 변경 안내 주석이 달려 있습니다.
+SD카드 설정은 `Copy-to-SD/` 내용을 카드 루트에 복사한 뒤 채운다.
 
-## 웹 설정 페이지
+- `yaml/SC_SecConfig.yaml` — WiFi, `apikey.aiservice`(OpenAI), `apikey.stt`(Whisper, 보통 동일 키), `apikey.tts`(Google Cloud TTS), 선택 `apikey.search`(Brave Search)
+- Wi-Fi 연결에 실패하면 SoftAP `StackChan-Setup`에 붙어 `http://192.168.4.1`에서 SSID/비밀번호를 설정한다 (저장 후 재부팅).
+- `face/` — `base`/`eyes`/`mouth`/`blush`/`fx` 320×240 PNG가 있으면 레이어 얼굴을 쓴다 (없으면 벡터 Face / RoboEyes).
+- `yaml/SC_BasicConfig.yaml` — 서보·핀
+- `app/AiStackChanEx/SC_ExConfig.yaml` — LLM/TTS/STT 선택 (기본: ChatGPT + Whisper + Google TTS)
+- 음악 mp3는 `app/AiStackChanEx/music/` 에 둔다
+- **공부 프로그램**: 이웃 프로젝트 `stackchan_kids_tutor_jiwoo_lite_v4_5_1/sdcard/kids_tutor/` 전체를 SD **루트**에 `/kids_tutor/` 로 복사한다 (문제 DB·`audio/text` WAV·config·progress). 저장소에는 넣지 않는다.
 
-기기가 WiFi에 연결되면 같은 네트워크의 폰/PC에서 `http://<기기-IP>/settings.html` 접속(기기 IP는 시리얼 로그나 공유기에서 확인). 페르소나·기억·발화·예약·볼륨·움직임·근접·쓰담·밤모드·머리 모션·효과음·WiFi를 한 페이지에서 설정합니다.
+Google Cloud TTS는 [Text-to-Speech API](https://cloud.google.com/text-to-speech)를 켠 뒤 API 키를 `apikey.tts`에 넣는다.
 
-## 외부 연동
+### 공부 프로그램 쓰는 법
 
-- **날씨** — `wttr.in` (무료, 키 불필요).
-- **미세먼지** — 공개 프록시 API.
-- **급식** — [NEIS 교육행정정보 오픈 API](https://open.neis.go.kr).
-- **할일·일정** — **[Nexusive](https://nexusive.com)**: 제작자가 만든 할일·일정·노트·가계부 플래너 앱. REST API(`/api/v1`, Bearer 인증)로 연동해, 로봇에게 "오늘 할일 알려줘" / "이번주 일정 뭐야" 하면 음성으로 답합니다. `SC_SecConfig.yaml`의 `apikey.nexusive`에 토큰을 넣으면 활성화됩니다.
+음성으로 「공부하자」「영어 하자」「수학」이라고 하거나, 웹 설정 → **공부 프로그램**에서 버튼을 누르면 KidsTutor 모드로 들어간다.
+
+| 선택 | 내용 |
+|---|---|
+| 데일리 / 공부 | 적응형 10분 (영어+소마+팩토) |
+| 영어 | 영어 자유학습 |
+| 수학 | 수학 자유학습 |
+| 6세 수학 | math_6yo DB가 있을 때 |
+
+세션 중 버튼: **A** 이전 보기 / **B** 확인 / **C** 다음 보기. 문제는 SD WAV로 읽어 준다. 답은 버튼으로만 고른다 (Whisper 답변은 없음). 공부 중에는 사용 시간 타이머가 일시정지된다.
+
+---
+
+## 기능 로드맵
+
+베이스에서 이미 동작하는 것과 이 프로젝트에서 추가한 것을 구분한다.
+
+| 기능 | 상태 |
+|---|---|
+| 한국어 음성 대화 (Whisper → GPT-4o mini → Google TTS) | 캐스케이드 기본 |
+| RoboEyes 표정 · 서보 제스처 · 웨이크워드 | 베이스 제공, 캐스케이드에서 사용 |
+| 한국어 웹 설정 페이지 · 페르소나 · 장기 기억 | 베이스 제공 (기본 페르소나는 아동용) |
+| 한국 생활 데이터 (날씨·미세먼지·급식·할일·일정) | 베이스 제공, 우리 지역/학교로 교체 필요 |
+| 사용 시간 제한 타이머 (30분, 공부 중 일시정지) | Function Calling `start_timer` |
+| SD카드 음악 재생 | Function Calling `play_sd_content` (music) |
+| SD카드 공부 프로그램 (kids_tutor) | `play_sd_content(study_program)` + KidsTutor 모드. SD `/kids_tutor/` 필요 |
+| 인터넷 검색 (Brave, safesearch strict) | Function Calling `web_search` |
+| 사진 촬영 → SD 저장 | `m5stack-cores3-camera` + `take_photo(save)` |
+| 사물 인식 (Vision) | `m5stack-cores3-camera` + `take_photo(recognize_object)` |
+| 사진 → BLE 감열 프린터 | **추가 예정** |
+| 사진 → 6색 e-paper 보드 | **추가 예정** |
+| 얼굴 등록·인식·삭제 | **추가 예정** — 실행 위치 미결정 (아래 참조) |
+
+### 미결정 사항
+
+**얼굴 인식을 어디서 돌릴 것인가.** 온디바이스 ESP-DL은 Arduino 프레임워크에 얹기 까다롭고
+베이스에 vendoring되어 있지 않다. 클라우드 비전으로 보내면 아이 얼굴이 외부로 나간다.
+후순위로 미루는 선택지도 있다. 카메라 I2C 공존 검증 결과를 보고 정한다.
+
+나머지 미결정 항목(e-paper 전송 방식과 디더링, BLE 프린터 ESC/POS 명령셋,
+카메라 모듈, 얼굴 유사도 임계값)은 `docs/stackchan_multifunction_design.md` 5장에 있다.
+
+---
 
 ## 라이선스
 
-이 저장소는 GPL-3.0-or-later 구성요소([FluxGarage RoboEyes](https://github.com/FluxGarage/RoboEyes))를 포함하므로 **GPL-3.0-or-later**로 배포됩니다. 루트 `LICENSE` 참조.
-
-기반·서드파티 프로젝트의 저작권과 라이선스는 **`NOTICE.md`** 에 명기되어 있습니다. 업스트림 관계와 동기화 방법은 **`UPSTREAM.md`** 참조.
-
-## 감사
-
-- [Stack-chan](https://github.com/meganetaaan/stack-chan) — Naoki Kosaka (@meganetaaan)
-- [AI_StackChan_Ex](https://github.com/ronron-gh/AI_StackChan_Ex) — motoh
-- [m5stack-avatar](https://github.com/meganetaaan/m5stack-avatar) — Shinya Ishikawa
-- [FluxGarage RoboEyes](https://github.com/FluxGarage/RoboEyes) — Dennis Hoelscher
+베이스가 GPL-3.0-or-later 구성요소(FluxGarage RoboEyes)를 포함하므로 이 저장소도
+**GPL-3.0-or-later**로 배포된다. 루트 `LICENSE` 참조.
+서드파티 저작권은 `NOTICE.md`, 업스트림 동기화는 `UPSTREAM.md`에 정리되어 있다.

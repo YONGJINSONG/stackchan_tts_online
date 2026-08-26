@@ -10,7 +10,7 @@
 #include <nvs.h>
 #include <Avatar.h>
 #include <faces/CatFace.h>
-#include "face/ImageFace.h"
+#include "face/LayeredFace.h"
 #include "Volume.h"
 #include "Gesture.h"
 #include "IdleMotion.h"
@@ -21,11 +21,13 @@
 #include "NightMode.h"
 #include "Proximity.h"
 #include "WifiConfig.h"
+#include "WifiSetupPortal.h"
 #include "face/RoboEyesView.h"   // 감정별 눈 색 설정 로드
 #include "Persona.h"
 #include "DiagLog.h"
 #include "Sfx.h"
 #include "ServoTrim.h"   // 서보 홈 보정 오프셋
+#include "usage_timer.h"
 #include "StackchanExConfig.h"
 #include "Robot.h"
 #include "mod/ModManager.h"
@@ -34,6 +36,7 @@
 #include "mod/AiStackChan/RealtimeAiMod.h"
 #include "mod/Pomodoro/PomodoroMod.h"
 #include "mod/PhotoFrame/PhotoFrameMod.h"
+#include "mod/KidsTutor/KidsTutorMod.h"
 #include "mod/RoboEyes/RoboEyesMod.h"
 #include "mod/StatusMonitor/StatusMonitorMod.h"
 #include "mod/VolumeSetting/VolumeSettingMod.h"
@@ -234,32 +237,6 @@ bool Wifi_connection_check() {
   return true;
 }
 
-bool WifiSmartConfig() {
-#if defined(USE_LLM_MODULE)
-  // LLMモジュール使用時は普通はオフラインが前提のため、Smart Config待ちはしない
-  return false;
-#else
-  unsigned long start_millis = millis();
-  WiFi.mode(WIFI_STA);
-  WiFi.beginSmartConfig();
-  M5.Display.println("Waiting for SmartConfig");
-  Serial.println("Waiting for SmartConfig");
-  while (!WiFi.smartConfigDone()) {
-    delay(1000);
-    M5.Display.print("#");
-    Serial.print("#");
-    // 30秒以上接続できなかったら抜ける
-    if ( 30000 < millis() - start_millis) {
-      Serial.println("");
-      //Serial.println("Reset");
-      //ESP.restart();
-      return false;
-    }
-  }
-  return true;
-#endif
-}
-
 void time_sync(const char* ntpsrv, long gmt_offset, int daylight_offset) {
   struct tm timeInfo; 
   char buf[60];
@@ -299,6 +276,7 @@ ModBase* init_mod(void)
   //add_mod(new EspNowRemoteMod());
   //add_mod(new PomodoroMod(isOffline));
   add_mod(new PhotoFrameMod(isOffline));
+  add_mod(new KidsTutorMod());
   add_mod(new RoboEyesMod(isOffline));   // RoboEyes 표정 모드 (1단계 검증)
   //add_mod(new QRdisplayMod());
   mod = get_current_mod();
@@ -516,7 +494,7 @@ void setup()
                                      "/SC_SecConfig.yaml", 2048,
                                      "/SC_BasicConfig.yaml", 2048);
 #else
-  if (SD.begin(GPIO_NUM_4, SPI, 25000000)) {
+  if (SD.begin(GPIO_NUM_4, SPI, 25000000, "/sd", 12)) {
     // この関数ですべてのYAMLファイル(Basic, Secret, Extend)を読み込む
     system_config.loadConfig(SD, "/app/AiStackChanEx/SC_ExConfig.yaml");
 #endif
@@ -542,26 +520,18 @@ void setup()
       // 前回設定での接続に失敗。SDカード設定による接続にトライ。
       Serial.println("The previous WiFi connection failed. Attempting to connect using the SD card settings.");
       if(wifi_info->ssid.length() == 0){
-        // SDカード設定の取得に失敗。Smart Configをスタート。
-        Serial.println("Can't get WiFi settings. Start Smart Config.");
-        if(!WifiSmartConfig()){
-          // Smart Config失敗。オフラインモード。
-          Serial.println("Smart Config failed. Running in offline mode.");
-          isOffline = true;
-        }
+        // No SD SSID — SoftAP captive portal (blocks until save, then reboots).
+        Serial.println("Can't get WiFi settings. Starting SoftAP portal.");
+        wifi_setup_portal_run();
       }else{
         WiFi.begin(wifi_info->ssid.c_str(), wifi_info->password.c_str());
         if(Wifi_connection_check()){
           // SDカード設定による接続に成功。
           Serial.println("Successfully established a Wi-Fi connection via the SD card settings.");
         }else{
-          // SDカード設定による接続に失敗。Smart Configをスタート。
-          Serial.println("WiFi connection failed due to SD card settings. Start Smart Config.");
-          if(!WifiSmartConfig()){
-            // Smart Config失敗。オフラインモード。
-            Serial.println("Smart Config failed. Running in offline mode.");
-            isOffline = true;
-          }
+          // SD / NVS failed — SoftAP captive portal (blocks until save, then reboots).
+          Serial.println("WiFi connection failed. Starting SoftAP portal.");
+          wifi_setup_portal_run();
         }
       }
     }
@@ -621,22 +591,26 @@ void setup()
   avatar.setPosition(-56, -96);
   avatar.init();
 #else
-  // Vector avatar with enlarged eyes (radius 8 → 18). Mouth/eyebrow/positions
-  // kept at defaults so lipsync and emotion changes keep working naturally.
+  // Prefer SD layered PNG face (/face/base|eyes|mouth|...). Else vector Face.
   // Must run BEFORE avatar.init(16) — init() calls face->initSprites() on the
   // current face; swapping after would leave our new face uninitialized.
-  customFace = new Face(
-      new Mouth(50, 90, 4, 60),     new BoundingRect(148, 163),
-      new Eye(18, false),           new BoundingRect(93,  90),     // R eye
-      new Eye(18, true),            new BoundingRect(96,  230),    // L eye
-      new Eyeblow(32, 0, false),    new BoundingRect(67,  96),
-      new Eyeblow(32, 0, true),     new BoundingRect(72,  230)
-  );
-  avatar.setFace(customFace);
-  Serial.println("[face] vector avatar with bigger eyes (r=18)");
-
-  // (ImageFace path kept in src/face/ for future re-enable; not used.)
-  // if (ImageFace::sdHasAnyImage()) { customFace = new ImageFace(); avatar.setFace(customFace); }
+  if (LayeredFace::sdReady()) {
+    customFace = new LayeredFace();
+    avatar.setFace(customFace);
+    layered_face_set_active(true);
+    Serial.println("[face] LayeredFace (SD /face)");
+  } else {
+    customFace = new Face(
+        new Mouth(50, 90, 4, 60),     new BoundingRect(148, 163),
+        new Eye(18, false),           new BoundingRect(93,  90),     // R eye
+        new Eye(18, true),            new BoundingRect(96,  230),    // L eye
+        new Eyeblow(32, 0, false),    new BoundingRect(67,  96),
+        new Eyeblow(32, 0, true),     new BoundingRect(72,  230)
+    );
+    avatar.setFace(customFace);
+    layered_face_set_active(false);
+    Serial.println("[face] vector avatar with bigger eyes (r=18)");
+  }
 
   //avatar.init();
   avatar.init(16);
@@ -734,6 +708,7 @@ void loop()
   battery_reaction_tick();
   night_mode_tick();
   idle_talk_tick();   // proactive speech (kept on main loop for WS-write safety)
+  checkUsageTimer();
 
   ModBase* mod = get_current_mod();
   mod->idle();

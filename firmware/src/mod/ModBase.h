@@ -44,6 +44,7 @@ public:
   virtual void doubleTapped(float ax, float ay, float az) {};   // 加速度センサによるダブルタップ検出のコールバック。platformio.iniで-DENABLE_TAP_DETECTを有効にしてください
   virtual void idle(void) {};
   virtual bool isBusy(void) {return false;};
+  const String& getName(void) const { return modName; }
 };
 
 

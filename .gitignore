@@ -4,8 +4,35 @@ firmware/.vscode/
 firmware/data/
 firmware/lib/aquestalk/
 *.bin
+*.elf
+*.map
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 *~
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# --- Secrets: never commit ---
+secrets/
+*.pem
+*.key
+.env
+.env.*
+# Google Cloud service-account keys (filename pattern + the one found in this tree)
+*-????????????.json
+colab-506215-914d1e70276d.json
+# Real API keys go on the SD card only; the repo keeps the ******** template
+Copy-to-SD/yaml/SC_SecConfig.local.yaml
+
+# Large SD-only kids_tutor content (WAV/DB) — copy from neighbor project, not git
+Copy-to-SD/kids_tutor/
+
+# User-supplied music on SD (do not commit copyrighted MP3s)
+Copy-to-SD/app/AiStackChanEx/music/*.mp3
+Copy-to-SD/app/AiStackChanEx/music/*.MP3

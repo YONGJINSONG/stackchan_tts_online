@@ -9,6 +9,7 @@
 #include "llm/ChatGPT/ChatGPT.h"
 #include "llm/ChatGPT/FunctionCall.h"
 #include "driver/PlayMP3.h"
+#include "Sfx.h"
 #include "driver/WakeWord.h"
 #include "driver/ModuleLLM.h"
 #include <WiFiClientSecure.h>
@@ -48,9 +49,9 @@ static void report_batt_level(){
   mode = 0;
 #endif
   if(M5.Power.isCharging())
-    sprintf(buff,"充電中、バッテリーのレベルは%d％です。",level);
+    sprintf(buff, "충전 중이에요. 배터리는 %d퍼센트예요.", level);
   else
-    sprintf(buff,"バッテリーのレベルは%d％です。",level);
+    sprintf(buff, "배터리는 %d퍼센트예요.", level);
   avatar.setExpression(Expression::Happy);
 #if defined(ENABLE_WAKEWORD)
   mode = 0; 
@@ -68,7 +69,7 @@ static void STT_ChatGPT(const char *base64_buf = NULL) {
 #endif
 
   avatar.setExpression(Expression::Happy);
-  avatar.setSpeechText("御用でしょうか？");
+  avatar.setSpeechText("응, 말해줘!");
 
   String ret = robot->listen();
   avatar.setSpeechText("");
@@ -88,7 +89,7 @@ static void STT_ChatGPT(const char *base64_buf = NULL) {
   } else {
     Serial.println("音声認識失敗");
     avatar.setExpression(Expression::Sad);
-    avatar.setSpeechText("聞き取れませんでした");
+    avatar.setSpeechText("잘 못 들었어요");
     delay(2000);
     avatar.setSpeechText("");
     avatar.setExpression(Expression::Neutral);
@@ -172,11 +173,11 @@ void AiStackChanMod::btnA_pressed(void)
   if(mode >= 0){
     sw_tone();
     if(mode == 0){
-      avatar.setSpeechText("ウェイクワード有効");
+      avatar.setSpeechText("웨이크워드 켜짐");
       mode = 1;
       wakeword_is_enable = true;
     } else {
-      avatar.setSpeechText("ウェイクワード無効");
+      avatar.setSpeechText("웨이크워드 꺼짐");
       mode = 0;
       wakeword_is_enable = false;
     }
@@ -205,7 +206,7 @@ void AiStackChanMod::btnB_longPressed(void)
     servo_home = true;
     delay(500);
 #endif
-  avatar.setSpeechText("ウェイクワード登録開始");
+  avatar.setSpeechText("웨이크워드 등록 시작");
 #endif
 }
 
@@ -256,10 +257,10 @@ void AiStackChanMod::display_touched(int16_t x, int16_t y)
 #if defined(ENABLE_CAMERA)
     isSilentMode = !isSilentMode;
     if(isSilentMode){
-      avatar.setSpeechText("サイレントモード");
+      avatar.setSpeechText("조용한 모드");
     }
     else{
-      avatar.setSpeechText("サイレントモード解除");
+      avatar.setSpeechText("조용한 모드 해제");
     }
     delay(2000);
     avatar.setSpeechText("");
@@ -292,6 +293,7 @@ void AiStackChanMod::doubleTapped(float ax, float ay, float az)
 
 void AiStackChanMod::idle(void)
 {
+  sfx_pump();
 
   /// Face detect ///
 #if defined(ENABLE_CAMERA)
@@ -346,7 +348,7 @@ void AiStackChanMod::idle(void)
     else if (mode < 0) {
       int idx = wakeword_regist();
       if(idx >= 0){
-        String text = String("ウェイクワード#") + String(idx) + String("登録終了");
+        String text = String("웨이크워드#") + String(idx) + String(" 등록 끝");
         avatar.setSpeechText(text.c_str());
         delay(1000);
         avatar.setSpeechText("");
@@ -361,7 +363,7 @@ void AiStackChanMod::idle(void)
       int idx = wakeword_compare();
       if( idx >= 0){
         Serial.println("wakeword_compare OK!");
-        String text = String("ウェイクワード#") + String(idx);
+        String text = String("웨이크워드#") + String(idx);
         avatar.setSpeechText(text.c_str());
         sw_tone();
         STT_ChatGPT();
@@ -392,7 +394,7 @@ void AiStackChanMod::idle(void)
 
     /* Query the period of the timer that expires. */
     xRemainingTime = xTimerGetExpiryTime( xAlarmTimer ) - xTaskGetTickCount();
-    avatarText = "残り" + String(xRemainingTime / 1000) + "秒";
+    avatarText = "남은 시간 " + String(xRemainingTime / 1000) + "초";
     avatar.setSpeechText(avatarText.c_str());
   }
 

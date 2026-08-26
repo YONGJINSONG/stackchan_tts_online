@@ -18,18 +18,16 @@ static volatile bool s_busy = false;
 bool camera_is_busy() { return s_busy; }
 void camera_vision_init() {}
 
-bool camera_vision_look(const String& hint) {
-#if defined(ENABLE_CAMERA) && defined(REALTIME_API)
-    if (isOffline || robot == nullptr || robot->llm == nullptr) return false;
-    if (s_busy) return false;
+String camera_vision_describe(const String& hint) {
+#if defined(ENABLE_CAMERA)
+    if (isOffline || robot == nullptr || robot->llm == nullptr) return String();
+    if (s_busy) return String();
     s_busy = true;
 
     String b64;
     bool ok = camera_capture_base64(b64);
-    if (!ok || b64.length() == 0) { s_busy = false; Serial.println("[vision] capture failed"); return false; }
+    if (!ok || b64.length() == 0) { s_busy = false; Serial.println("[vision] capture failed"); return String(); }
 
-    // Build the chat/completions request by hand (the base64 image makes the
-    // body large; avoid a giant ArduinoJson document for the request).
     String p = hint.length() ? hint
                              : String("이 이미지에 보이는 것을 한국어로 한 문장으로 아주 간단히 설명해줘.");
     p.replace("\\", "\\\\"); p.replace("\"", "\\\""); p.replace("\n", " ");
@@ -42,14 +40,14 @@ bool camera_vision_look(const String& hint) {
     body += "\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,";
     body += b64;
     body += "\"}}]}]}";
-    b64 = String();   // free the capture copy
+    b64 = String();
 
     WiFiClientSecure client;
-    client.setInsecure();              // dev-level: skip CA verification (matches FunctionCall)
+    client.setInsecure();
     HTTPClient https;
     https.setTimeout(15000);
     if (!https.begin(client, "https://api.openai.com/v1/chat/completions")) {
-        s_busy = false; Serial.println("[vision] https begin failed"); return false;
+        s_busy = false; Serial.println("[vision] https begin failed"); return String();
     }
     https.addHeader("Content-Type", "application/json");
     https.addHeader("Authorization", String("Bearer ") + robot->llm->param.api_key);
@@ -61,21 +59,32 @@ bool camera_vision_look(const String& hint) {
 
     if (code != 200) {
         Serial.printf("[vision] HTTP %d: %s\n", code, resp.substring(0, 160).c_str());
-        return false;
+        return String();
     }
 
     SpiRamJsonDocument doc(resp.length() + 1024);
-    if (deserializeJson(doc, resp)) { Serial.println("[vision] response parse error"); return false; }
+    if (deserializeJson(doc, resp)) { Serial.println("[vision] response parse error"); return String(); }
     const char* desc = doc["choices"][0]["message"]["content"] | "";
-    if (!desc || !*desc) { Serial.println("[vision] empty content"); return false; }
+    if (!desc || !*desc) { Serial.println("[vision] empty content"); return String(); }
+    Serial.printf("[vision] %s\n", desc);
+    return String(desc);
+#else
+    (void)hint;
+    return String();
+#endif
+}
 
+bool camera_vision_look(const String& hint) {
+    String desc = camera_vision_describe(hint);
+    if (desc.length() == 0) return false;
+
+#if defined(REALTIME_API)
     String inject = String("[방금 카메라로 본 것: ") + desc +
                     "] 이걸 가족에게 자연스럽게 한두 문장으로 말해줘. 너무 길지 않게.";
     ((RealtimeLLMBase*)robot->llm)->pushUserText(inject);
-    Serial.printf("[vision] %s\n", desc);
     return true;
 #else
-    (void)hint;
-    return false;
+    if (robot) robot->speech(desc);
+    return true;
 #endif
 }

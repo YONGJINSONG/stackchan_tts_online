@@ -48,9 +48,7 @@ public:
     //
     String fn_update_memory(LLMBase* llm, const char* memory);
 
-    #if defined(REALTIME_API)
     String set_avatar_expression(const char* expression);
-    #endif
 
     String timer(int32_t time, const char* action);
     String timer_change(int32_t time);
@@ -65,6 +63,12 @@ public:
     String get_school_meal(const char* when);
     String get_todos();
     String get_schedules();
+
+    String web_search(const char* query);
+    String play_sd_content(const char* content_type, const char* name);
+#if defined(ENABLE_CAMERA)
+    String take_photo(const char* output);
+#endif
 
     #if defined(ARDUINO_M5STACK_CORES3)
     #if defined(ENABLE_WAKEWORD)

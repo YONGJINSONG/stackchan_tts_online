@@ -49,6 +49,29 @@ ModBase* change_mod(bool reverse)
   return mod;
 }
 
+ModBase* change_mod_named(const char* name)
+{
+  if (name == nullptr || name[0] == '\0' || modList.empty()) return get_current_mod();
+  if (modList[0]->getName() == name) return modList[0];
+
+  const size_t n = modList.size();
+  for (size_t i = 0; i < n; i++) {
+    ModBase* cur = modList[0];
+    cur->pause();
+    modList.pop_front();
+    modList.push_back(cur);
+    if (modList[0]->getName() == name) {
+      avatar.setFaceOffsetX(0);
+      modList[0]->init();
+      return modList[0];
+    }
+  }
+  Serial.printf("[mod] change_mod_named: '%s' not found\n", name);
+  avatar.setFaceOffsetX(0);
+  modList[0]->init();
+  return modList[0];
+}
+
 ModBase* get_current_mod(void)
 {
   return modList[0];

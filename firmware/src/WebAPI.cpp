@@ -20,6 +20,7 @@
 #include "Persona.h"
 #include "Sfx.h"
 #include "mod/PhotoFrame/PhotoFrameMod.h"
+#include "mod/KidsTutor/KidsTutorMod.h"
 
 using namespace m5avatar;
 extern Avatar avatar;
@@ -590,6 +591,15 @@ void handle_photo_set() {
   else                                          server.send(400, "text/plain", "invalid JSON");
 }
 
+void handle_tutor_start() {
+  if (server.method() != HTTP_POST) { server.send(405, "text/plain", "POST only"); return; }
+  String subject = server.arg("subject");
+  if (subject.length() == 0) subject = server.arg("plain");
+  subject.trim();
+  String msg = kids_tutor_start_by_name(subject.c_str());
+  server.send(200, "text/plain; charset=utf-8", msg);
+}
+
 void handle_persona_get() {
   sendNoCacheHeaders();
   server.send(200, "application/json", persona_get_json());
@@ -756,6 +766,7 @@ void init_web_server(void)
   server.on("/sfx_test", HTTP_POST, handle_sfx_test);
   server.on("/photo_get", handle_photo_get);
   server.on("/photo_set", HTTP_POST, handle_photo_set);
+  server.on("/tutor_start", HTTP_POST, handle_tutor_start);
   server.on("/memory_get", handle_memory_get);
   server.on("/memory_set", HTTP_POST, handle_memory_set);
   server.on("/memory_clear", handle_memory_clear);

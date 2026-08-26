@@ -1,0 +1,2 @@
+# SD 음악 파일을 이 폴더에 넣으세요 (mp3).
+# 예: /app/AiStackChanEx/music/hello.mp3

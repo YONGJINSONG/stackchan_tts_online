@@ -29,5 +29,6 @@ extern bool isSilentMode;
 extern esp_err_t camera_init(void);
 extern bool camera_capture_and_face_detect(void);
 extern bool camera_capture_base64(String& out);
+extern bool camera_capture_save_sd(String& outPath);
 
 #endif //_CAMERA_H_

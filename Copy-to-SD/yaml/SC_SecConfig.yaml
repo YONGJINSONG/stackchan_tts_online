@@ -1,10 +1,13 @@
 # 個人情報用の設定ファイル
+# Real keys stay on your SD card only — never commit real values.
 wifi:
   ssid: "********"
   password: "********"
 
 
 apikey:
-  stt: "********"       # ApiKey of SpeechToText Service
-  aiservice: "********" # ApiKey of AIService
-  tts: "********"       # ApiKey of TextToSpeech Service
+  stt: "********"       # OpenAI API Key (Whisper STT). aiservice와 같아도 됨
+  aiservice: "********" # OpenAI API Key (GPT-4o mini)
+  tts: "********"       # Google Cloud TTS API Key (Text-to-Speech API 사용)
+  search: "********"    # (선택) Brave Search API Key. 웹 검색 도구용
+  nexusive: "********"  # (선택) Nexusive 할일/일정 연동

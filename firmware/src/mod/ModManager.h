@@ -8,6 +8,7 @@
 
 extern void add_mod(ModBase* mod);
 extern ModBase* change_mod(bool reverse = false);
+extern ModBase* change_mod_named(const char* name);
 extern ModBase* get_current_mod(void);
 
 

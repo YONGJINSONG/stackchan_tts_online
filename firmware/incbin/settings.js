@@ -533,6 +533,18 @@
       .catch(e => setStatus($('sfxStatus'), '실패: ' + e, false));
   });
 
+  // ---------- 공부 프로그램 (kids_tutor) ----------
+  function startTutor(subject) {
+    setStatus($('tutorStatus'), '시작 요청 중...', true);
+    postText('/tutor_start', subject)
+      .then(o => setStatus($('tutorStatus'), o.t || (o.ok ? '시작됨' : '실패'), o.ok))
+      .catch(e => setStatus($('tutorStatus'), '실패: ' + e, false));
+  }
+  if ($('tutorDailyBtn')) $('tutorDailyBtn').addEventListener('click', () => startTutor('daily'));
+  if ($('tutorEngBtn')) $('tutorEngBtn').addEventListener('click', () => startTutor('english'));
+  if ($('tutorMathBtn')) $('tutorMathBtn').addEventListener('click', () => startTutor('math'));
+  if ($('tutorMath6Btn')) $('tutorMath6Btn').addEventListener('click', () => startTutor('math6'));
+
   // ---------- 포토프레임 ----------
   function loadPhoto() {
     fetch('/photo_get').then(r => r.json()).then(d => {

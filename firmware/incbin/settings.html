@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <title>스택짱 설정</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="settings.js?v=12" defer></script>
+  <script src="settings.js?v=13" defer></script>
   <style>
     html { font-size: 16px; }
     body { font-family: Arial, sans-serif; margin: 0.8em; background: #f4f5f7; color: #222; }
@@ -311,6 +311,21 @@
       <div id="eyeColorList"></div>
       <button type="button" id="eyeColorSaveBtn">눈 색 저장</button>
       <div id="eyeColorStatus" class="status"></div>
+    </div>
+  </details>
+
+  <!-- ============ 공부 프로그램 (kids_tutor) ============ -->
+  <details>
+    <summary>공부 프로그램 (kids_tutor)</summary>
+    <div class="body">
+      <p class="note">SD 루트에 <code>/kids_tutor/</code>(문제 DB·음성 WAV)가 있어야 해요. 시작하면 화면+버튼 세션으로 넘어갑니다. A 이전 / B 확인 / C 다음.</p>
+      <div class="pillrow">
+        <button type="button" id="tutorDailyBtn" class="secondary">데일리 10분</button>
+        <button type="button" id="tutorEngBtn">영어</button>
+        <button type="button" id="tutorMathBtn">수학</button>
+        <button type="button" id="tutorMath6Btn" class="ghost">6세 수학</button>
+      </div>
+      <div id="tutorStatus" class="status"></div>
     </div>
   </details>
 

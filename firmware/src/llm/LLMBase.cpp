@@ -24,7 +24,7 @@ const String SYSTEM_PROMPT_FORMAT =
 "}";
 
 // ユーザーが設定するロールのデフォルト設定用
-const String defaultRole = "You are a friendly robot named 스택짱. Respond only in Korean (한국어).";
+const String defaultRole = "너는 '스택짱'이라는 귀여운 로봇이야. 아이와 부모님과 함께 살아. 반드시 한국어로만, 한두 문장으로 쉽고 다정하게 대답해.";
 // システム用のロール（Function Callingの利用方針など）
 const String systemRole_memory = "If the conversation includes user attributes (such as hobbies or interests) or memorable episodes, summarize them and use the update_memory tool to update the User Info in the system prompt. The summary should also inherit the contents of the old User Info as much as possible.";
 const String systemRole_noMemory = "Memory function disabled. Do not use update_memory tool.";
@@ -68,15 +68,13 @@ int LLMBase::getOutputTextQueueSize()
 // 戻り値：区切り文字あり(true)、なし(false)
 int LLMBase::search_delimiter(String& text)
 {
-  // 区切り文字を検出
   int idx = text.indexOf("。");
-  if(idx < 0){
-    idx = text.indexOf("？");
-  }
-  if(idx < 0){
-    idx = text.indexOf("！");
-  }
-
+  if(idx < 0) idx = text.indexOf("？");
+  if(idx < 0) idx = text.indexOf("！");
+  if(idx < 0) idx = text.indexOf("?");
+  if(idx < 0) idx = text.indexOf("!");
+  if(idx < 0) idx = text.indexOf(". ");
+  if(idx < 0) idx = text.indexOf(".\n");
   return idx;
 }
 

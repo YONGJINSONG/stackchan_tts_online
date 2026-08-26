@@ -4,7 +4,7 @@
 #include <ArduinoJson.h>
 #include "rootCA/rootCAgoogle.h"
 
-String LANG_CODE = "ja-jp";
+String LANG_CODE = "ko-KR";
 
 namespace {
 constexpr char* API_HOST = "speech.googleapis.com";

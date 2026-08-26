@@ -2,6 +2,15 @@
 #include "Sfx.h"
 #include "NightMode.h"
 #include "DiagLog.h"   // play_sound 진단 (FTP /diag.log)
+#include "usage_timer.h"
+#include "driver/PlayMP3.h"
+#include "share/SdBus.h"
+#include "SpiRamJsonDocument.h"
+#include "mod/KidsTutor/KidsTutorMod.h"
+#if defined(ENABLE_CAMERA)
+#include "driver/Camera.h"
+#include "CameraVision.h"
+#endif
 #include <Avatar.h>
 #include "Robot.h"
 #include <AudioGeneratorMP3.h>
@@ -57,7 +66,6 @@ const String json_Functions =
       "\"required\": [\"memory\"]"
     "}"
   "},"
-#if defined(REALTIME_API)
   "{"
     "\"name\": \"set_avatar_expression\","
     "\"description\": \"Change Stack-chan's facial expression. CALL THIS TOOL FREQUENTLY — every time the emotional tone of the conversation shifts (joy, sadness, anger, doubt, sleepiness, calm). Calling this often is REQUIRED and expected; not calling it makes the robot feel lifeless. Each call is silent visual feedback: never speak the expression value (neutral/happy/angry/sad/doubt/sleepy) aloud, and never mention this tool or the function call in your spoken or transcribed response. The user sees the expression change visually, never hears it.\","
@@ -73,7 +81,6 @@ const String json_Functions =
       "\"required\": [\"expression\"]"
     "}"
   "},"
-#endif
   "{"
     "\"name\": \"timer\","
     "\"description\": \"指定した時間が経過したら、指定した動作を実行する。指定できる動作はalarmとshutdown。\","
@@ -199,6 +206,52 @@ const String json_Functions =
       "\"required\": [\"sleep\"]"
     "}"
   "},"
+  "{"
+    "\"name\": \"start_timer\","
+    "\"description\": \"일반 사용(대화, 음악 등)에 사용 시간 제한 타이머를 시작한다. 공부 프로그램 사용 중에는 적용하지 않는다. duration_minutes 기본값은 30분.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"duration_minutes\":{ \"type\": \"integer\", \"description\": \"타이머 시간(분). 기본 30.\" }"
+      "}"
+    "}"
+  "},"
+  "{"
+    "\"name\": \"web_search\","
+    "\"description\": \"아이가 사실 정보를 묻거나 검색해 달라고 하거나, 최신 정보가 필요할 때 호출한다. SafeSearch strict가 항상 적용된다.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"query\":{ \"type\": \"string\", \"description\": \"검색 질의어 (한국어 또는 영어)\" }"
+      "},"
+      "\"required\": [\"query\"]"
+    "}"
+  "},"
+  "{"
+    "\"name\": \"play_sd_content\","
+    "\"description\": \"SD카드에 저장된 콘텐츠를 재생한다. 공부 프로그램을 시작하거나 음악을 틀어달라고 할 때 호출한다.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"content_type\":{ \"type\": \"string\", \"enum\": [\"study_program\", \"music\"], \"description\": \"study_program: 공부 프로그램, music: SD 음악\" },"
+        "\"name\":{ \"type\": \"string\", \"description\": \"프로그램명. daily/데일리/공부, english/영어, math/수학/소마, math6/6세. 비우면 데일리 10분.\" }"
+      "},"
+      "\"required\": [\"content_type\"]"
+    "}"
+  "},"
+#if defined(ENABLE_CAMERA)
+  "{"
+    "\"name\": \"take_photo\","
+    "\"description\": \"사진을 찍어달라고 할 때 호출한다. 저장, 사물 인식 등을 수행한다. 방식을 말하지 않으면 output을 save로 둔다.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"output\":{ \"type\": \"string\", \"enum\": [\"save\", \"print\", \"display\", \"recognize_face\", \"recognize_object\"], \"description\": \"save: SD 저장, recognize_object: 사물 인식, print/display/recognize_face는 아직 미구현\" }"
+      "},"
+      "\"required\": [\"output\"]"
+    "}"
+  "},"
+#endif
   // === end custom ===
   "{"
     "\"name\": \"get_date\","
@@ -335,12 +388,10 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       Serial.println(memory);
       response = fn_update_memory(_llm, memory);
     }
-#if defined(REALTIME_API)
     else if(strcmp(name, "set_avatar_expression") == 0){
       const char* expression = argsDoc["expression"];
       response = set_avatar_expression(expression);
     }
-#endif
     else if(strcmp(name, "timer") == 0){
       const int time = argsDoc["time"];
       const char* action = argsDoc["action"];
@@ -404,6 +455,26 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       night_mode_force_sleep(sleep);
       response = sleep ? "{\"result\":\"취침 모드로 전환했어요.\"}" : "{\"result\":\"평소 모드로 돌아왔어요.\"}";
     }
+    else if(strcmp(name, "start_timer") == 0){
+      int minutes = argsDoc["duration_minutes"] | 30;
+      armUsageTimer(minutes);
+      response = String("{\"result\":\"") + String(minutes) + "분 타이머를 시작했어요.\"}";
+    }
+    else if(strcmp(name, "web_search") == 0){
+      const char* query = argsDoc["query"];
+      response = web_search(query ? query : "");
+    }
+    else if(strcmp(name, "play_sd_content") == 0){
+      const char* ctype = argsDoc["content_type"];
+      const char* cname = argsDoc["name"] | "";
+      response = play_sd_content(ctype ? ctype : "music", cname);
+    }
+#if defined(ENABLE_CAMERA)
+    else if(strcmp(name, "take_photo") == 0){
+      const char* output = argsDoc["output"] | "save";
+      response = take_photo(output);
+    }
+#endif
     // === end custom ===
 #if defined(USE_EXTENSION_FUNCTIONS)
     else if(strcmp(name, "reminder") == 0){
@@ -443,7 +514,6 @@ String FunctionCall::fn_update_memory(LLMBase* llm, const char* memory){
   return response;
 }
 
-#if defined(REALTIME_API)
 String FunctionCall::set_avatar_expression(const char* expression){
   if(expression == NULL){
     return "Avatar expression is missing.";
@@ -479,7 +549,6 @@ String FunctionCall::set_avatar_expression(const char* expression){
   gesture_play(avatarExpression);
   return "Avatar expression set to " + expressionName + ".";
 }
-#endif
 
 
 String FunctionCall::timer(int32_t time, const char* action){
@@ -1164,5 +1233,169 @@ String FunctionCall::get_schedules() {
   if (g_cache_schedules.length() == 0) return "{\"status\":\"schedules not ready, ask again in a moment\"}";
   return g_cache_schedules;
 }
+
+static String& search_api_key() {
+  static String key;
+  static bool loaded = false;
+  if (loaded) return key;
+  loaded = true;
+  File f = SD.open("/yaml/SC_SecConfig.yaml", "r");
+  if (!f) return key;
+  String body = f.readString();
+  f.close();
+  DynamicJsonDocument doc(8192);
+  if (deserializeYml(doc, body.c_str())) return key;
+  const char* k = doc["apikey"]["search"] | "";
+  key = String(k);
+  return key;
+}
+
+static String fc_urlencode(const String& s) {
+  String o;
+  const char* hex = "0123456789ABCDEF";
+  for (unsigned i = 0; i < s.length(); i++) {
+    unsigned char c = (unsigned char)s[i];
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '_' || c == '.' || c == '~') {
+      o += (char)c;
+    } else if (c == ' ') {
+      o += '+';
+    } else {
+      o += '%';
+      o += hex[(c >> 4) & 0xF];
+      o += hex[c & 0xF];
+    }
+  }
+  return o;
+}
+
+String FunctionCall::web_search(const char* query) {
+  if (!query || !query[0]) return "{\"error\":\"empty query\"}";
+  String key = search_api_key();
+  if (key.length() == 0) {
+    return "{\"error\":\"검색 API 키가 없어요. SC_SecConfig.yaml의 apikey.search에 Brave Search 키를 넣어주세요.\"}";
+  }
+
+  String url = String("https://api.search.brave.com/res/v1/web/search?safesearch=strict&count=5&q=")
+             + fc_urlencode(String(query));
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(10);
+  HTTPClient http;
+  if (!http.begin(client, url)) return "{\"error\":\"search connect failed\"}";
+  http.addHeader("Accept", "application/json");
+  http.addHeader("X-Subscription-Token", key);
+  int code = http.GET();
+  String body = (code > 0) ? http.getString() : String();
+  http.end();
+  if (code != 200) {
+    Serial.printf("[fn] brave search HTTP %d\n", code);
+    return "{\"error\":\"검색에 실패했어요.\"}";
+  }
+
+  SpiRamJsonDocument doc(body.length() + 2048);
+  if (deserializeJson(doc, body)) return "{\"error\":\"검색 결과를 읽지 못했어요.\"}";
+  JsonArray results = doc["web"]["results"].as<JsonArray>();
+  if (results.isNull() || results.size() == 0) {
+    return "{\"result\":\"검색 결과가 없어요.\"}";
+  }
+
+  String out = "{\"results\":[";
+  int n = 0;
+  for (JsonObject r : results) {
+    if (n >= 3) break;
+    const char* title = r["title"] | "";
+    const char* desc = r["description"] | "";
+    if (n) out += ",";
+    out += "{\"title\":\"";
+    String t = String(title); t.replace("\"", "'"); t.replace("\n", " ");
+    String d = String(desc); d.replace("\"", "'"); d.replace("\n", " ");
+    out += t;
+    out += "\",\"snippet\":\"";
+    out += d;
+    out += "\"}";
+    n++;
+  }
+  out += "]}";
+  return out;
+}
+
+static String find_music_on_sd(const char* name) {
+  String dirPath = String(APP_DATA_PATH) + "music";
+  sd_bus_lock();
+  File dir = SD.open(dirPath.c_str());
+  String match;
+  String first;
+  String q = name ? String(name) : String();
+  q.toLowerCase();
+  if (dir) {
+    for (File e = dir.openNextFile(); e; e = dir.openNextFile()) {
+      if (e.isDirectory()) continue;
+      String n = String(e.name());
+      int sl = n.lastIndexOf('/');
+      if (sl >= 0) n = n.substring(sl + 1);
+      String lower = n; lower.toLowerCase();
+      if (!(lower.endsWith(".mp3"))) continue;
+      if (first.length() == 0) first = n;
+      if (q.length() && (lower.indexOf(q) >= 0 || q.indexOf(lower) >= 0)) {
+        match = n;
+        break;
+      }
+    }
+    dir.close();
+  }
+  sd_bus_unlock();
+  if (match.length()) return match;
+  return first;
+}
+
+String FunctionCall::play_sd_content(const char* content_type, const char* name) {
+  String ctype = content_type ? String(content_type) : String("music");
+  if (ctype == "study_program") {
+    String msg = kids_tutor_start_by_name(name);
+    String esc = msg; esc.replace("\"", "'");
+    return String("{\"result\":\"") + esc + "\"}";
+  }
+
+  String file = find_music_on_sd(name);
+  if (file.length() == 0) {
+    return "{\"error\":\"SD /app/AiStackChanEx/music/ 에 mp3 파일이 없어요.\"}";
+  }
+  String path = String(APP_DATA_PATH) + "music/" + file;
+  bool ok = playMP3SD(path.c_str());
+  if (ok) return String("{\"result\":\"") + file + " 를 재생했어요.\"}";
+  return "{\"error\":\"음악을 재생하지 못했어요.\"}";
+}
+
+#if defined(ENABLE_CAMERA)
+String FunctionCall::take_photo(const char* output) {
+  String mode = output ? String(output) : String("save");
+  if (mode == "save") {
+    String path;
+    if (camera_capture_save_sd(path)) {
+      return String("{\"result\":\"사진을 저장했어요.\",\"path\":\"") + path + "\"}";
+    }
+    return "{\"error\":\"사진 촬영에 실패했어요.\"}";
+  }
+  if (mode == "recognize_object") {
+    String desc = camera_vision_describe(String("이 이미지에 보이는 것을 한국어로 한두 문장으로, 아이가 이해하기 쉽게 설명해줘."));
+    if (desc.length() == 0) return "{\"error\":\"사물을 알아보지 못했어요.\"}";
+    desc.replace("\"", "'");
+    desc.replace("\n", " ");
+    return String("{\"result\":\"") + desc + "\"}";
+  }
+  if (mode == "print") {
+    return "{\"error\":\"블루투스 프린터는 아직 연결되지 않았어요.\"}";
+  }
+  if (mode == "display") {
+    return "{\"error\":\"e-paper 전송은 아직 준비 중이에요.\"}";
+  }
+  if (mode == "recognize_face") {
+    return "{\"error\":\"얼굴 인식은 아직 켜져 있지 않아요.\"}";
+  }
+  return "{\"error\":\"지원하지 않는 사진 처리 방식이에요.\"}";
+}
+#endif
+
 
 

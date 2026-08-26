@@ -1,0 +1,118 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "take_photo",
+        "description": "사용자가 사진을 찍어달라고 요청할 때 호출한다. 촬영 후 저장, 블루투스 프린터 출력, e-paper 디스플레이 전송, 얼굴 인식, 사물 인식 중 하나를 수행한다. 사용자가 방식을 명시하지 않으면 output을 'save'로 기본 설정한다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "output": {
+              "type": "string",
+              "enum": ["save", "print", "display", "recognize_face", "recognize_object"],
+              "description": "save: SD카드 저장만, print: 블루투스 열가압 프린터로 출력, display: 외부 e-paper 디스플레이 보드로 전송, recognize_face: ESP-WHO/ESP-DL 온디바이스 얼굴 인식('누구야?' 등 사람 식별 요청), recognize_object: GPT-4o mini Vision으로 사물 인식('이게 뭐야?', 고양이/책/장난감 등 임의 객체 질문)"
+            }
+          },
+          "required": ["output"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "enroll_face",
+        "description": "새로운 가족 구성원의 얼굴을 등록해달라고 요청할 때 호출한다. name이 비어있으면 먼저 이름을 물어본 뒤 다시 호출한다. 호출되면 등록 모드로 진입해 정면/좌측/우측 3장을 순차 캡처하고 feature를 SD카드 DB에 저장한 뒤, ID들을 name과 매핑 테이블에 기록한다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "등록할 사람 이름 (예: 아빠, 엄마, 첫째, 둘째). 비어있으면 되묻기부터 수행한다."
+            }
+          },
+          "required": ["name"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_face",
+        "description": "등록된 가족 구성원의 얼굴 정보를 삭제해달라고 요청할 때 호출한다. 매핑 테이블에서 해당 이름의 id들을 조회해 DB에서 feature를 삭제하고 매핑 테이블에서도 제거한다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "삭제할 사람 이름"
+            }
+          },
+          "required": ["name"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "play_sd_content",
+        "description": "SD카드에 저장된 콘텐츠를 재생한다. 아이가 공부 프로그램을 시작하거나 음악을 틀어달라고 할 때 호출한다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content_type": {
+              "type": "string",
+              "enum": ["study_program", "music"],
+              "description": "study_program: 스택챤용 자체 제작 공부 프로그램 구동, music: SD카드 내 음악 파일 재생"
+            },
+            "name": {
+              "type": "string",
+              "description": "특정 프로그램명 또는 곡명/재생목록명. 지정하지 않으면 기본/최근 항목을 재생한다."
+            }
+          },
+          "required": ["content_type"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "아이가 사실 정보를 묻거나 '검색해줘'라고 요청할 때, 모델이 알지 못하는 최신 정보가 필요할 때 호출한다. SafeSearch(strict) 옵션이 항상 적용된다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "검색할 질의어 (한국어 또는 영어)"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_timer",
+        "description": "일반 사용(챗봇 대화, 음악 감상 등)에 대해 사용 시간 제한 타이머를 시작한다. 공부 프로그램(study_program) 사용 중에는 이 타이머를 적용하지 않는다. 타이머 종료 시 별도 알림 멘트를 TTS로 안내한다.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "duration_minutes": {
+              "type": "integer",
+              "description": "타이머 시간(분). 기본값은 30분.",
+              "default": 30
+            }
+          },
+          "required": []
+        }
+      }
+    }
+  ],
+  "notes": {
+    "general_chat": "별도의 tool 없이, 위 함수들 중 어느 것도 해당하지 않을 때의 기본 동작(default fallback)으로 처리한다. 일반 대화 응답은 그대로 텍스트 생성 후 TTS로 출력한다.",
+    "face_db": "enroll_face/delete_face/take_photo(recognize_face)는 모두 동일한 ESP-WHO/ESP-DL feature DB와 'ID-이름 매핑 테이블'(SD카드 JSON)을 공유한다.",
+    "hermes": "추후 연동 예정, 현재 스키마에는 포함하지 않음."
+  }
+}

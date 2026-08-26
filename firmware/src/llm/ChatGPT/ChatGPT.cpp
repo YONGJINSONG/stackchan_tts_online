@@ -18,7 +18,7 @@ extern Avatar avatar;
 
 
 const String json_ChatString = 
-"{\"model\": \"gpt-4o\","
+"{\"model\": \"gpt-4o-mini\","
   "\"messages\": [{\"role\": \"system\", \"content\": \"\"},"     // ユーザーが設定するロール
                   "{\"role\": \"system\", \"content\": \"\"},"    // システム用のロール
                   "{\"role\": \"system\", \"content\": \"User Info: \"}],"  // 長期記憶の要約
@@ -77,6 +77,8 @@ void ChatGPT::load_role(){
   }else{
     systemRole = systemRole_noMemory;
   }
+  systemRole += " ";
+  systemRole += systemRole_realtimeAvatarExpression;
 
   if(load_system_prompt_from_spiffs()){
     role = String((const char*)systemPrompt["messages"][SYSTEM_PROMPT_INDEX_USER_ROLE]["content"]);
@@ -121,7 +123,7 @@ void ChatGPT::load_role(){
   /*
    * FunctionCall.cppで定義したfunctionを挿入
    */
-  SpiRamJsonDocument functionsDoc(1024*10);
+  SpiRamJsonDocument functionsDoc(1024*20);
   DeserializationError error = deserializeJson(functionsDoc, json_Functions.c_str());
   if (error) {
     Serial.println("load_role: JSON deserialization error");
@@ -130,6 +132,14 @@ void ChatGPT::load_role(){
   int nFuncs = functionsDoc.size();
   for(int i=0; i<nFuncs; i++){
     chat_doc["functions"].add(functionsDoc[i]);
+  }
+
+  if(param.llm_conf.model.length()
+     && param.llm_conf.model != "null"
+     && param.llm_conf.model != ""){
+    chat_doc["model"] = param.llm_conf.model;
+  } else {
+    chat_doc["model"] = "gpt-4o-mini";
   }
 
   /*
