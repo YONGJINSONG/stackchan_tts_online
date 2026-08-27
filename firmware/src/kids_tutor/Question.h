@@ -21,4 +21,9 @@ struct Question {
   std::vector<String> speechAnswers;
   String answerLanguage;
   String image;
+
+  // Spatial questions are rendered directly with M5GFX on CoreS3.
+  String visualType;
+  String visualData;
+  std::vector<String> visualChoices;
 };
