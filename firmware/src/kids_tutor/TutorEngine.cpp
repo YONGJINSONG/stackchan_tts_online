@@ -7,10 +7,11 @@
 #include <math.h>
 
 void TutorEngine::begin(QuestionDB& englishDb, QuestionDB& mathDb, StackchanUI& ui, LearningManager& learning,
-                        QuestionDB* math6Db) {
+                        QuestionDB* math6Db, QuestionDB* spatialDb) {
   _english = &englishDb;
   _math = &mathDb;
   _math6 = math6Db;
+  _spatial = spatialDb;
   _ui = &ui;
   _learning = &learning;
   _level = learning.startLevel();
@@ -21,11 +22,10 @@ uint8_t TutorEngine::currentLevelCap() const {
   if (cap < 1) cap = 1;
   if (cap > MAX_LEVEL) cap = MAX_LEVEL;
 
-  // Never climb past what the database actually contains: math.ndjson stops at
-  // level 2, so a higher level would only ever resolve through the fallback.
   uint8_t available = MAX_LEVEL;
   if (_subject == Subject::English && _english) available = _english->maxAvailableLevel();
   else if (_subject == Subject::Math6 && _math6) available = _math6->maxAvailableLevel();
+  else if (_subject == Subject::Spatial && _spatial) available = _spatial->maxAvailableLevel();
   else if (_subject == Subject::Math) {
     QuestionDB* db = freeMathDb();
     if (db) available = db->maxAvailableLevel();
@@ -138,7 +138,7 @@ bool TutorEngine::voiceMatches(const String& heard) const {
 }
 
 bool TutorEngine::isEnglishQuestion() const {
-  if (_subject == Subject::Math || _subject == Subject::Math6) return false;
+  if (_subject == Subject::Math || _subject == Subject::Math6 || _subject == Subject::Spatial) return false;
   if (_current.answerLanguage.length()) return _current.answerLanguage != "ko";
   if (_subject == Subject::Daily) return _currentEnglish;
   return !(_current.id.startsWith("SOMA") || _current.id.startsWith("FACTO") ||
@@ -167,17 +167,25 @@ String TutorEngine::subjectName() const {
   if (_subject == Subject::English) return "ENGLISH";
   if (_subject == Subject::Math6) return "MATH 6YO";
   if (_subject == Subject::Math) return (_learning && _learning->freeMath6yo()) ? "MATH 6YO" : "MATH";
+  if (_subject == Subject::Spatial) return "SPATIAL";
   return isEnglishQuestion() ? "MIX:EN" : "MIX:MATH";
 }
 
 void TutorEngine::buildChoices() {
   _displayChoices = _current.choices;
   if (!_displayChoices.empty()) {
-    if (_displayChoices.size() > 4) _displayChoices.resize(4);
+    if (_subject == Subject::Spatial && _displayChoices.size() > 3) _displayChoices.resize(3);
+    else if (_displayChoices.size() > 4) _displayChoices.resize(4);
     return;
   }
   if (_current.answerType == "number") {
     int v = _current.answer.toInt();
+    if (_subject == Subject::Spatial) {
+      std::vector<int> nums = {max(0, v-1), v, v+1};
+      for (int i=2;i>0;--i) { int j=random(i+1); std::swap(nums[i],nums[j]); }
+      for (int n : nums) _displayChoices.push_back(String(n));
+      return;
+    }
     std::vector<int> nums = {max(0, v-1), v, v+1, v+2};
     std::vector<int> unique;
     for (int n : nums) if (std::find(unique.begin(), unique.end(), n) == unique.end()) unique.push_back(n);
@@ -208,8 +216,6 @@ bool TutorEngine::loadNext() {
   if (finishDailyIfNeeded()) return false;
 
   bool loaded = false;
-  // SD reads must be isolated from the CoreS3 LCD bus. Rendering happens only
-  // after this lock is released below.
   sd_bus_lock();
   if (_subject == Subject::Daily && _learning) {
     String oldId = _current.id;
@@ -219,6 +225,7 @@ bool TutorEngine::loadNext() {
     if (_subject == Subject::English) { db = _english; _currentEnglish = true; }
     else if (_subject == Subject::Math6) { db = _math6; _currentEnglish = false; }
     else if (_subject == Subject::Math) { db = freeMathDb(); _currentEnglish = false; }
+    else if (_subject == Subject::Spatial) { db = _spatial; _currentEnglish = false; }
     else {
       _currentEnglish = _mixedEnglishNext;
       db = _mixedEnglishNext ? _english : _math;

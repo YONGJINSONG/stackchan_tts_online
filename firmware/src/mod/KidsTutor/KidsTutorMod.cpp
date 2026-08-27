@@ -28,11 +28,13 @@ StackchanUI g_ui;
 QuestionDB g_englishDb;
 QuestionDB g_mathDb;
 QuestionDB g_math6Db;
+QuestionDB g_spatialDb;
 QuestionDB g_curriculumDb;
 LearningManager g_learning;
 TutorEngine g_tutor;
 KidsTutorMod* g_kidsTutorMod = nullptr;
 bool g_math6Loaded = false;
+bool g_spatialLoaded = false;
 portMUX_TYPE g_voiceStartMux = portMUX_INITIALIZER_UNLOCKED;
 bool g_voiceStartPending = false;
 TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
@@ -59,6 +61,7 @@ bool KidsTutorMod::ensureReady(String& errOut) {
   bool okMath = g_mathDb.begin(SD, MATH_DB_PATH, MATH_IDX_PATH);
   bool okCur = g_curriculumDb.begin(SD, CURRICULUM_DB_PATH, CURRICULUM_IDX_PATH);
   g_math6Loaded = g_math6Db.begin(SD, MATH6_DB_PATH, MATH6_IDX_PATH);
+  g_spatialLoaded = g_spatialDb.begin(SD, SPATIAL_DB_PATH, SPATIAL_IDX_PATH);
   sd_bus_unlock();
 
   if (!okEng || !okMath || !okCur) {
@@ -77,11 +80,13 @@ bool KidsTutorMod::ensureReady(String& errOut) {
     errOut = "학습 설정을 읽지 못했어요.";
     return false;
   }
-  g_tutor.begin(g_englishDb, g_mathDb, g_ui, g_learning, g_math6Loaded ? &g_math6Db : nullptr);
+  g_tutor.begin(g_englishDb, g_mathDb, g_ui, g_learning,
+                g_math6Loaded ? &g_math6Db : nullptr,
+                g_spatialLoaded ? &g_spatialDb : nullptr);
   _engineReady = true;
-  Serial.printf("[kids] ready eng=%u math=%u cur=%u math6=%d\n",
+  Serial.printf("[kids] ready eng=%u math=%u cur=%u math6=%d spatial=%d\n",
                 (unsigned)g_englishDb.size(), (unsigned)g_mathDb.size(),
-                (unsigned)g_curriculumDb.size(), (int)g_math6Loaded);
+                (unsigned)g_curriculumDb.size(), (int)g_math6Loaded, (int)g_spatialLoaded);
   return true;
 }
 
@@ -99,6 +104,12 @@ void KidsTutorMod::beginSession(TutorEngine::Subject subject) {
   String err;
   if (!ensureReady(err)) {
     g_ui.showMessage("ERROR", err);
+    return;
+  }
+  if (subject == TutorEngine::Subject::Spatial && !g_spatialLoaded) {
+    g_ui.showMessage("SPATIAL", "SD에 spatial.ndjson / spatial.idx를 넣어 주세요.");
+    delay(1200);
+    showMenu();
     return;
   }
   pauseUsageTimer();
@@ -125,7 +136,6 @@ void KidsTutorMod::queuePendingSubject(TutorEngine::Subject subject) {
 }
 
 void KidsTutorMod::init(void) {
-  // Own the LCD while this mod is active (RoboEyes / avatar face off).
   g_avatar_render_pause = true;
   uint32_t pauseStart = millis();
   while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
@@ -159,31 +169,37 @@ void KidsTutorMod::pause(void) {
 }
 
 void KidsTutorMod::btnA_pressed(void) {
-  if (!_session) beginSession(TutorEngine::Subject::Daily);
+  if (!_session) beginSession(TutorEngine::Subject::English);
   else g_tutor.previousChoice();
 }
 
 void KidsTutorMod::btnB_pressed(void) {
-  if (!_session) beginSession(TutorEngine::Subject::English);
-  else g_tutor.submitChoice();
-}
-
-void KidsTutorMod::btnC_pressed(void) {
   if (!_session) {
     if (g_math6Loaded || (_engineReady && g_learning.freeMath6yo()))
       beginSession(TutorEngine::Subject::Math6);
     else
       beginSession(TutorEngine::Subject::Math);
-  } else {
-    g_tutor.nextChoice();
-  }
+  } else g_tutor.submitChoice();
+}
+
+void KidsTutorMod::btnC_pressed(void) {
+  if (!_session) beginSession(TutorEngine::Subject::Spatial);
+  else g_tutor.nextChoice();
 }
 
 void KidsTutorMod::display_touched(int16_t x, int16_t y) {
-  // CoreS3 has no physical A/B/C buttons. Match the three on-screen controls:
-  // menu = Daily / English / Math, quiz = Previous / Submit / Next.
   const int width = M5.Display.width();
-  if (width <= 0) return;
+  const int height = M5.Display.height();
+  if (width <= 0 || height <= 0) return;
+
+  // Menu main body starts the original Daily 10-minute session.
+  // Bottom 36px remains a fixed English / Math / Spatial selector.
+  if (!_session && y < height - 36) {
+    Serial.printf("[kids] touch daily x=%d y=%d\n", (int)x, (int)y);
+    beginSession(TutorEngine::Subject::Daily);
+    return;
+  }
+
   int section = (x * 3) / width;
   if (section < 0) section = 0;
   if (section > 2) section = 2;
@@ -202,7 +218,6 @@ void KidsTutorMod::idle(void) {
     return;
   }
   g_tutor.tick();
-  // Button-only answers — do not call pollVoice (Whisper/cloud STT).
 }
 
 bool KidsTutorMod::isBusy(void) {
@@ -213,29 +228,23 @@ static TutorEngine::Subject map_subject_name(const String& raw) {
   String n = raw;
   n.trim();
   n.toLowerCase();
-  if (n == "english" || n == "영어" || n.indexOf("english") >= 0 || n.indexOf("영어") >= 0) {
+  if (n == "english" || n == "영어" || n.indexOf("english") >= 0 || n.indexOf("영어") >= 0)
     return TutorEngine::Subject::English;
-  }
-  if (n == "math6" || n == "6세" || n.indexOf("math6") >= 0 || n.indexOf("6세") >= 0) {
+  if (n == "math6" || n == "6세" || n.indexOf("math6") >= 0 || n.indexOf("6세") >= 0)
     return TutorEngine::Subject::Math6;
-  }
   if (n == "math" || n == "수학" || n == "소마" || n.indexOf("math") >= 0
-      || n.indexOf("수학") >= 0 || n.indexOf("소마") >= 0 || n.indexOf("팩토") >= 0) {
+      || n.indexOf("수학") >= 0 || n.indexOf("소마") >= 0 || n.indexOf("팩토") >= 0)
     return TutorEngine::Subject::Math;
-  }
-  // empty / daily / generic "공부" → Daily 10 min
+  if (n == "spatial" || n == "공간" || n == "공간지각" || n == "도형" || n == "레고"
+      || n.indexOf("spatial") >= 0 || n.indexOf("공간") >= 0 || n.indexOf("도형") >= 0 || n.indexOf("레고") >= 0)
+    return TutorEngine::Subject::Spatial;
   return TutorEngine::Subject::Daily;
 }
 
 String kids_tutor_start_by_name(const char* name) {
-  if (g_kidsTutorMod == nullptr) {
-    return String("공부 모드가 없어요.");
-  }
+  if (g_kidsTutorMod == nullptr) return String("공부 모드가 없어요.");
 
   TutorEngine::Subject sub = map_subject_name(name ? String(name) : String());
-  // This function is called on the Realtime WebSocket task. Do not touch SD,
-  // display, audio, or ModManager here: RealtimeAiMod::pause() would suspend
-  // that same task in the middle of its WebSocket callback.
   portENTER_CRITICAL(&g_voiceStartMux);
   g_voiceStartSubject = sub;
   g_voiceStartPending = true;
@@ -246,6 +255,7 @@ String kids_tutor_start_by_name(const char* name) {
   if (sub == TutorEngine::Subject::English) label = "영어 자유학습";
   else if (sub == TutorEngine::Subject::Math) label = "수학 자유학습";
   else if (sub == TutorEngine::Subject::Math6) label = "6세 수학";
+  else if (sub == TutorEngine::Subject::Spatial) label = "공간지각";
   return String(label) + "을 준비할게요.";
 }
 
@@ -253,8 +263,6 @@ void kids_tutor_process_pending() {
   if (g_kidsTutorMod == nullptr) return;
 
 #if defined(REALTIME_API)
-  // Let the function-output follow-up response finish before pausing the
-  // Realtime mode. This also leaves the shared I2S audio state clean.
   if (robot && robot->llm && ((RealtimeLLMBase*)robot->llm)->isSpeaking()) return;
 #endif
 

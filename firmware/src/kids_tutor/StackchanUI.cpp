@@ -1,7 +1,7 @@
 #include "StackchanUI.h"
+#include "SpatialRenderer.h"
 
 void StackchanUI::begin() {
-  // Host firmware already called M5.begin(); only claim the display here.
   M5.Display.setFont(&fonts::efontKR_16);
   M5.Display.setTextSize(1);
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -79,13 +79,14 @@ void StackchanUI::drawTouchFooter(bool quiz) {
   const int h = M5.Display.height();
   const int top = h - 36;
   const int third = w / 3;
-  const char* labels[3] = { quiz ? "이전" : "매일", quiz ? "정답" : "영어", quiz ? "다음" : "수학" };
+  const char* labels[3] = { quiz ? "이전" : "영어", quiz ? "정답" : "수학", quiz ? "다음" : "공간" };
   M5.Display.fillRect(0, top, w, h - top, TFT_BLACK);
   for (int i = 0; i < 3; i++) {
     int left = i * third + 3;
     int right = (i == 2) ? w - 3 : (i + 1) * third - 3;
     M5.Display.drawRoundRect(left, top + 3, right - left, 29, 5, TFT_DARKGREY);
-    M5.Display.drawString(labels[i], left + 20, top + 10);
+    int tw = M5.Display.textWidth(labels[i]);
+    M5.Display.drawString(labels[i], left + ((right-left)-tw)/2, top + 10);
   }
 }
 
@@ -94,10 +95,10 @@ void StackchanUI::showBootMenu(const String& learner, uint8_t age, bool math6yo)
   M5.Display.setTextSize(1);
   M5.Display.drawString("KIDS TUTOR", 10, 10);
   M5.Display.drawString(learner + "  " + String(age) + "세", 10, 36);
-  M5.Display.drawString("화면 아래를 눌러 과목을 골라요", 10, 66);
+  M5.Display.drawString("가운데 화면: 데일리 10분", 10, 66);
   M5.Display.drawString(math6yo ? "수학: 6세 과정" : "수학: 자유 학습", 10, 94);
   M5.Display.drawString(localAudioReady() ? "소리: 로컬" : "소리: 기본", 10, 122);
-  M5.Display.drawString("문제: 이전 · 정답 · 다음", 10, 150);
+  M5.Display.drawString("아래: 영어 · 수학 · 공간", 10, 150);
   drawTouchFooter(false);
 }
 
@@ -111,12 +112,14 @@ void StackchanUI::showStatusLine(const String& subject, uint8_t level, uint32_t 
 
 void StackchanUI::showQuestion(const Question& q, const std::vector<String>& choices, int selected,
                                const String& subject, uint8_t level, uint32_t stars) {
+  if (q.mode == "spatial" || q.category == "spatial") {
+    SpatialRenderer::drawQuestion(q, choices, selected, subject, level, stars);
+    return;
+  }
+
   M5.Display.fillScreen(TFT_BLACK);
   showStatusLine(subject, level, stars);
 
-  // CoreS3 shares the SD MISO pin with LCD control. drawPngFile reads SD while
-  // writing the panel and can reset the device, so use the reliable text layout
-  // there. Other boards retain image questions.
 #if defined(ARDUINO_M5STACK_CORES3)
   const bool hasImage = false;
 #else
@@ -130,7 +133,6 @@ void StackchanUI::showQuestion(const Question& q, const std::vector<String>& cho
   if (hasImage) {
     const int imgMax = 60;
     const int imgX = (M5.Display.width() - imgMax) / 2;
-    // M5GFX on this PlatformIO pinout expects a path (SD), not fs::FS& + path.
     M5.Display.drawPngFile(q.image.c_str(), imgX, 26, imgMax, imgMax);
     textY = 96;
     questionLines = 2;
