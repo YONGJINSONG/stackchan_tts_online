@@ -8,10 +8,6 @@ bool QuestionDB::begin(fs::FS& fs, const char* dataPath, const char* indexPath) 
   if (_file) _file.close();
   _offsets.clear();
 
-  // A .idx that is merely stale still opens and parses as a list of numbers, so
-  // the offsets are only trusted once every record behind them reads back. When
-  // that fails the index is rebuilt from the data file instead of serving
-  // garbage for the rest of the session.
   if (!loadIndex(indexPath) || !buildMetadata()) {
     Serial.printf("[DB] %s: index unusable, rebuilding from data file\n", dataPath);
     _offsets.clear();
@@ -57,8 +53,6 @@ bool QuestionDB::buildIndex() {
 }
 
 bool QuestionDB::buildMetadata() {
-  // Level 0 marks a record that did not read back, which keeps it out of every
-  // pick without having to renumber the offsets.
   _levels.assign(_offsets.size(), 0);
   _idHashes.assign(_offsets.size(), 0);
   _maxLevel = 1;
@@ -72,8 +66,6 @@ bool QuestionDB::buildMetadata() {
   }
   if (bad) Serial.printf("[DB] %s: %u/%u records unreadable\n",
                          _dataPath.c_str(), (unsigned)bad, (unsigned)_offsets.size());
-  // A few malformed records are survivable. A wholesale mismatch means the
-  // offsets belong to a different revision of the data file.
   return bad * 10 <= _offsets.size();
 }
 
@@ -85,7 +77,7 @@ bool QuestionDB::readLineAt(size_t index, String& line) {
       line = _file.readStringUntil('\n');
       if (line.length() > 2) return true;
     }
-    _file.close();  // Drop a possibly stale handle and retry once.
+    _file.close();
   }
   return false;
 }
@@ -133,6 +125,14 @@ bool QuestionDB::parseLine(const String& line, Question& q) {
   if (q.speechAnswers.empty()) q.speechAnswers.push_back(q.answer);
   q.answerLanguage = doc["answer_language"] | "";
   q.image = doc["image"] | "";
+
+  q.visualType = doc["visual_type"] | "";
+  q.visualData = doc["visual_data"] | "";
+  q.visualChoices.clear();
+  if (doc["visual_choices"].is<JsonArray>()) {
+    for (JsonVariant v : doc["visual_choices"].as<JsonArray>()) q.visualChoices.push_back(v.as<String>());
+  }
+
   return q.id.length() > 0;
 }
 
@@ -163,7 +163,6 @@ bool QuestionDB::randomByLevel(uint8_t level, Question& out, const String& avoid
     size_t index = 0;
     if (pickRandomAtLevel((uint8_t)lv, avoidHash, index) && readAt(index, out)) return true;
   }
-  // Last resort: any readable record, starting from a random position.
   const size_t n = _offsets.size();
   const size_t start = (size_t)random((long)n);
   for (size_t k = 0; k < n; ++k) {
