@@ -7,10 +7,10 @@
 
 class TutorEngine {
 public:
-  enum class Subject { Daily, English, Math, Math6, Mixed };
+  enum class Subject { Daily, English, Math, Math6, Spatial, Mixed };
 
   void begin(QuestionDB& englishDb, QuestionDB& mathDb, StackchanUI& ui, LearningManager& learning,
-             QuestionDB* math6Db = nullptr);
+             QuestionDB* math6Db = nullptr, QuestionDB* spatialDb = nullptr);
   bool start(Subject subject);
   void previousChoice();
   void nextChoice();
@@ -18,9 +18,6 @@ public:
   void skip();
   void pollVoice();
   void requestVoiceRetry();
-
-  // Called every loop so the daily session still ends on time (and the parent
-  // report still gets written) when the child stops answering mid-question.
   void tick();
 
   const Question& current() const { return _current; }
@@ -35,6 +32,7 @@ private:
   QuestionDB* _english = nullptr;
   QuestionDB* _math = nullptr;
   QuestionDB* _math6 = nullptr;
+  QuestionDB* _spatial = nullptr;
   StackchanUI* _ui = nullptr;
   LearningManager* _learning = nullptr;
   Subject _subject = Subject::Daily;
