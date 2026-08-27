@@ -218,6 +218,10 @@ void LayeredFace::rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx) {
   if (!_composite || !_base) return;
   blitLayer(_base, true);
   if (blush >= 0 && blush < BLUSH_COUNT) blitLayer(_blush[blush], false);
+  if (blush == BLUSH_SHY && _blush[BLUSH_SHY] == nullptr) {
+    _composite->fillEllipse(72, 158, 25, 10, 0xF98F);
+    _composite->fillEllipse(248, 158, 25, 10, 0xF98F);
+  }
 
   M5Canvas* eyeSpr = _eyes[eye] ? _eyes[eye] : _eyes[EYE_CENTER];
   blitLayer(eyeSpr, false);

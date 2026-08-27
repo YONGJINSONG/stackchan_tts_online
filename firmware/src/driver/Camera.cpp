@@ -9,6 +9,8 @@
 #include <base64.h>
 #include "DebugTools.h"
 #include "share/SdBus.h"
+#include "Robot.h"
+#include "CameraVision.h"
 using namespace m5avatar;
 extern Avatar avatar;
 
@@ -37,8 +39,8 @@ static camera_config_t camera_config = {
     .pin_pclk  = 45,
 
     .xclk_freq_hz = 20000000,
-    .ledc_timer   = LEDC_TIMER_0,
-    .ledc_channel = LEDC_CHANNEL_0,
+    .ledc_timer   = LEDC_TIMER_3,
+    .ledc_channel = LEDC_CHANNEL_6,
 
     .pixel_format = PIXFORMAT_RGB565,
     //.pixel_format = PIXFORMAT_JPEG,
@@ -51,12 +53,30 @@ static camera_config_t camera_config = {
     .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
 };
 
-esp_err_t camera_init(void){
+static bool camera_session_open = false;
+static bool camera_servo_suspended = false;
+
+static esp_err_t camera_session_begin(void){
+
+    if (camera_session_open) return ESP_OK;
+    camera_sensor_bus_lock();
+    camera_set_hardware_busy(true);
+    if (robot && robot->servo) {
+        uint32_t waitStart = millis();
+        while (robot->servo->isMoving() && millis() - waitStart < 5000) delay(10);
+        camera_servo_suspended = robot->servo->suspendPwmForCamera();
+    }
 
     //initialize the camera
     M5.In_I2C.release();
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
+        M5.In_I2C.begin();
+        if (camera_servo_suspended && robot && robot->servo) robot->servo->resumePwmAfterCamera();
+        camera_servo_suspended = false;
+        camera_set_hardware_busy(false);
+        camera_sensor_bus_unlock();
+        Serial.printf("[camera] init failed: 0x%x (I2C restored)\n", (unsigned)err);
         //Serial.println("Camera Init Failed");
         M5.Display.println("Camera Init Failed");
         return err;
@@ -65,6 +85,25 @@ esp_err_t camera_init(void){
     sensor_t *s = esp_camera_sensor_get();
     s->set_hmirror(s, 0);        // 左右反転
 
+    camera_session_open = true;
+    return ESP_OK;
+}
+
+static void camera_session_end(void) {
+    if (camera_session_open) {
+        esp_camera_deinit();
+        camera_session_open = false;
+    }
+    bool restored = M5.In_I2C.begin();
+    if (camera_servo_suspended && robot && robot->servo) robot->servo->resumePwmAfterCamera();
+    camera_servo_suspended = false;
+    camera_set_hardware_busy(false);
+    camera_sensor_bus_unlock();
+    Serial.printf("[camera] session closed, internal I2C restored=%d\n", restored ? 1 : 0);
+}
+
+esp_err_t camera_init(void) {
+    Serial.println("[camera] lazy capture ready");
     return ESP_OK;
 }
 
@@ -133,13 +172,15 @@ static void draw_face_boxes(fb_data_t *fb, std::list<dl::detect::result_t> *resu
 bool camera_capture_and_face_detect(void){
   bool isDetected = false;
 
+  if (camera_session_begin() != ESP_OK) return false;
+
   //acquire a frame
-  M5.In_I2C.release();
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     //Serial.println("Camera Capture Failed");
     M5.Display.println("Camera Capture Failed");
-    return ESP_FAIL;
+    camera_session_end();
+    return false;
   }
 
 #if defined(ENABLE_FACE_DETECT)
@@ -183,6 +224,7 @@ bool camera_capture_and_face_detect(void){
 
   //return the frame buffer back to the driver for reuse
   esp_camera_fb_return(fb);
+  camera_session_end();
 
   //Serial.println("<<< heap size after fb return >>>");  
   //check_heap_free_size();
@@ -194,12 +236,13 @@ bool camera_capture_and_face_detect(void){
 
 bool camera_capture_base64(String& out)
 {
+  if (camera_session_begin() != ESP_OK) return false;
   //acquire a frame
-  M5.In_I2C.release();
   camera_fb_t *fb = esp_camera_fb_get();
 
   if (!fb) {
     Serial.println("Camera Capture Failed");
+    camera_session_end();
     return false;
   }
 
@@ -211,15 +254,21 @@ bool camera_capture_base64(String& out)
   fb = NULL;
   if (!jpeg_converted) {
     Serial.println("JPEG compression failed");
+    camera_session_end();
     return false;
   }
+
+  camera_session_end();
 
 #if 1 //debug
   File fdst = SPIFFS.open("/capture.jpg", FILE_WRITE);
   if ((ret = fdst.write(jpg_buf, jpg_buf_len)) < jpg_buf_len) {
     Serial.printf("write spiffs failed: %d - %d\n", ret, jpg_buf_len);
+    fdst.close();
+    free(jpg_buf);
     return false;
   }
+  fdst.close();
 #endif
 
 
@@ -242,10 +291,11 @@ bool camera_capture_base64(String& out)
 
 bool camera_capture_save_sd(String& outPath)
 {
-  M5.In_I2C.release();
+  if (camera_session_begin() != ESP_OK) return false;
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("Camera Capture Failed");
+    camera_session_end();
     return false;
   }
 
@@ -255,8 +305,10 @@ bool camera_capture_save_sd(String& outPath)
   esp_camera_fb_return(fb);
   if (!jpeg_converted) {
     Serial.println("JPEG compression failed");
+    camera_session_end();
     return false;
   }
+  camera_session_end();
 
   sd_bus_lock();
   SD.mkdir("/app");

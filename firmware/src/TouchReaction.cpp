@@ -8,6 +8,7 @@
 #include "IdleTalk.h"
 #include "PetReaction.h"
 #include "CameraVision.h"
+#include "NightMode.h"
 
 using namespace m5avatar;
 extern Avatar avatar;
@@ -17,7 +18,7 @@ extern Avatar avatar;
 // Config is only touched from the loop task — no mutex needed.
 static bool g_lookEnabled    = true;
 static bool g_strokeEnabled  = true;
-static int  g_strokeThreshold = 120;   // accumulated drag pixels to count as a stroke
+static int  g_strokeThreshold = 60;   // accumulated drag pixels to count as a stroke
 
 static void load_from_spiffs() {
     if (!SPIFFS.exists(TOUCH_SPIFFS_PATH)) {
@@ -62,44 +63,48 @@ bool touch_reaction_set_json(const String& json) {
 
 extern volatile bool g_inAiMod;     // defined in RealtimeAiMod.cpp
 
-void touch_reaction_tick() {
+bool touch_reaction_tick() {
 #if defined(ARDUINO_M5STACK_Core2) || defined(ARDUINO_M5STACK_CORES3)
-    if (!g_inAiMod) return;         // 쓰담/시선은 AI 대화 모드에서만 — 포토프레임 등 스와이프 오인 방지
-    if (camera_is_busy()) return;   // camera owns the internal I2C during capture
+    if (!g_inAiMod || night_mode_display_is_off() || camera_is_busy()) return false;
     static int strokeAccum = 0;
 
     auto count = M5.Touch.getCount();
-    if (!count) return;
+    if (!count) return false;
     auto t = M5.Touch.getDetail();
-    int W = M5.Display.width();
-    int H = M5.Display.height();
-    if (W <= 0 || H <= 0) return;
+    int width = M5.Display.width();
+    int height = M5.Display.height();
+    if (width <= 0 || height <= 0) return false;
 
     if (t.wasPressed()) strokeAccum = 0;
 
     if (t.isPressed()) {
         if (g_lookEnabled) {
-            float h = ((float)t.x / (W * 0.5f)) - 1.0f;   // -1 (left) .. 1 (right)
-            float v = ((float)t.y / (H * 0.5f)) - 1.0f;   // -1 (top)  .. 1 (bottom)
-            if (h < -1) h = -1; if (h > 1) h = 1;
-            if (v < -1) v = -1; if (v > 1) v = 1;
-            avatar.setGaze(v, h);
-            idle_motion_hold(1000);     // don't let idle yank the gaze away mid-touch
+            float horizontal = ((float)t.x / (width * 0.5f)) - 1.0f;
+            float vertical = ((float)t.y / (height * 0.5f)) - 1.0f;
+            horizontal = constrain(horizontal, -1.0f, 1.0f);
+            vertical = constrain(vertical, -1.0f, 1.0f);
+            avatar.setGaze(vertical, horizontal);
+            idle_motion_hold(1000);
         }
         if (g_strokeEnabled) strokeAccum += abs(t.deltaX()) + abs(t.deltaY());
     }
 
     if (t.wasReleased()) {
-        // A real stroke = enough accumulated drag, and NOT a quick flick (which
-        // the mod uses to switch screens) — so we don't fight that gesture.
-        if (g_strokeEnabled && !t.wasFlicked() && strokeAccum > g_strokeThreshold) {
+        bool petStroke = g_strokeEnabled
+                         && !t.wasFlicked()
+                         && strokeAccum > g_strokeThreshold;
+        if (petStroke) {
             Serial.printf("[touch] stroke (%dpx) -> pet\n", strokeAccum);
             idle_talk_note_activity();
-            pet_reaction_fire();
+            bool fired = pet_reaction_fire();
+            Serial.printf("[touch] pet release consumed (fired=%d)\n", fired ? 1 : 0);
+            strokeAccum = 0;
+            return true;
         }
         strokeAccum = 0;
     }
 #endif
+    return false;
 }
 
 void touch_reaction_init() {

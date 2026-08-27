@@ -32,6 +32,8 @@ static volatile bool g_isNight = false;
 // Manual override (voice "잘자" → sleep now / "일어나" → back to schedule).
 static volatile bool g_forceActive = false;   // true = ignore clock, use g_forceSleep
 static volatile bool g_forceSleep  = false;
+static volatile bool g_displayForcedOff = false;
+static volatile bool g_displayDirty = false;
 
 static void lock()   { if (g_mux) xSemaphoreTake(g_mux, portMAX_DELAY); }
 static void unlock() { if (g_mux) xSemaphoreGive(g_mux); }
@@ -48,6 +50,23 @@ void night_mode_force_sleep(bool sleep) {
     } else {
         Serial.println("[night] force released → schedule");
     }
+}
+
+void night_mode_set_display_power(bool on) {
+    g_displayForcedOff = !on;
+    g_displayDirty = true;
+    Serial.printf("[display] power request: %s\n", on ? "on" : "off");
+}
+
+bool night_mode_display_is_off() {
+    return g_displayForcedOff;
+}
+
+bool night_mode_wake_display() {
+    if (!g_displayForcedOff) return false;
+    night_mode_set_display_power(true);
+    Serial.println("[display] first touch consumed to wake LCD");
+    return true;
 }
 
 static void clampConfig(NightConfig& c) {
@@ -155,6 +174,22 @@ void night_mode_tick() {
     static int  appliedBrightness = -1;
     static bool prevNight = false;
     static bool firstValidDone = false;   // have we seen at least one valid clock reading?
+
+    if (g_displayForcedOff) {
+        if (g_displayDirty || appliedBrightness != 0) {
+            M5.Display.setBrightness(0);
+            appliedBrightness = 0;
+            g_displayDirty = false;
+            Serial.println("[display] brightness -> 0 (manual off)");
+        }
+        return;
+    }
+
+    if (g_displayDirty) {
+        g_displayDirty = false;
+        lastCheckMs = 0;
+        appliedBrightness = -1;
+    }
 
     uint32_t now = millis();
     if (now - lastCheckMs < 10000 && lastCheckMs != 0) return;   // every 10s (first call runs immediately)

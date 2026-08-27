@@ -124,7 +124,7 @@ String VoiceLite::modeLabel() const {
 
 void VoiceLite::missingTone() {
   if(!_settings.missingAudioTone) return;
-  M5.Mic.end(); M5.Speaker.begin(); M5.Speaker.setVolume(120);
+  M5.Mic.end(); M5.Speaker.begin(); M5.Speaker.setVolume(TUTOR_TONE_VOLUME);
   M5.Speaker.tone(850,65); delay(90); M5.Speaker.end();
 }
 
@@ -165,12 +165,15 @@ bool VoiceLite::playWav(const String& path) {
   if(got!=bytes){ free(pcm); return false; }
   size_t samples=bytes/2;
   if(ch==2){size_t frames=samples/2; for(size_t i=0;i<frames;++i){int32_t v=(int32_t)pcm[2*i]+pcm[2*i+1];pcm[i]=(int16_t)(v/2);}samples=frames;}
-  M5.Mic.end(); M5.Speaker.begin(); M5.Speaker.setVolume(180);
+  M5.Mic.end(); M5.Speaker.begin(); M5.Speaker.setVolume(TUTOR_WAV_VOLUME);
   bool ok=M5.Speaker.playRaw(pcm,samples,rate,false,1,0);
   if(ok) while(M5.Speaker.isPlaying()){M5.update();delay(2);}
   free(pcm);
   M5.Speaker.end();
-  M5.Mic.begin();
+  // Button-only tutoring does not consume the microphone. Leaving it stopped
+  // avoids creating a mic_task between back-to-back local WAV clips. Voice
+  // input modes restore it here so their listen path remains unchanged.
+  if (_inputReady) M5.Mic.begin();
   return ok;
 }
 

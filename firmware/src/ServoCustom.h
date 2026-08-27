@@ -9,6 +9,8 @@ public:
     void moveToOrigin();
     void moveTo(int degX, int degY);
     void moveTo(int degX, int degY, uint32_t millis_for_move);
+    bool suspendPwmForCamera();
+    void resumePwmAfterCamera();
 
 };
 

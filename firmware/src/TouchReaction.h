@@ -14,7 +14,7 @@
 // handlers run there too), so no locking is needed.
 
 void   touch_reaction_init();
-void   touch_reaction_tick();
+bool   touch_reaction_tick();
 String touch_reaction_get_json();
 bool   touch_reaction_set_json(const String& json);
 

@@ -7,5 +7,6 @@ extern volatile uint32_t gesture_suppress_until;
 
 void gesture_init();
 void gesture_play(m5avatar::Expression e);
+bool gesture_dance();
 
 #endif  //_GESTURE_H

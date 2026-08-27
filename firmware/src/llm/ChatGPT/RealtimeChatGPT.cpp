@@ -14,6 +14,7 @@
 #include "MCPClient.h"
 #include "Robot.h"
 #include "DiagLog.h"
+#include "CameraAction.h"
 
 #include <base64.h>
 #include "libb64/cdecode.h"
@@ -123,6 +124,12 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 				Serial.println("[WSc] disconnect mid-speech — audio state reset (mutex released)");
 			}
 			last_commit_time = 0;
+            if (p_this->hasDeferredFunctionCall) {
+                camera_action_abandon();
+                p_this->hasDeferredFunctionCall = false;
+                p_this->deferredFunctionCallId = "";
+                Serial.println("[camera-action] deferred call abandoned on disconnect");
+            }
 			break;
 		case WStype_CONNECTED:
 			Serial.printf("[WSc] Connected to url: %s\n", payload);
@@ -266,6 +273,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
                 bool isFuncCall = false;
+                bool modeSwitchRequested = false;
+                bool deferredActionRequested = false;
                 for(int i = 0; i < outputNum; i++){
                     String outputType = p_this->msgDoc["response"]["output"][i]["type"].as<String>();
                     if(outputType.equals("function_call")){
@@ -279,6 +288,16 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                         //avatar.setSpeechFont(&fonts::efontJA_12);
                         //avatar.setSpeechText(name);
                         String response = p_this->fnCall->exec_calledFunc(name, args);
+                        modeSwitchRequested = p_this->fnCall->consumeModeSwitchRequest()
+                                              || modeSwitchRequested;
+                        bool deferred = p_this->fnCall->consumeDeferredActionRequest();
+                        if (deferred) {
+                            p_this->deferredFunctionCallId = call_id ? call_id : "";
+                            p_this->hasDeferredFunctionCall = true;
+                            deferredActionRequested = true;
+                            Serial.printf("[WSc] function deferred: %s\n", name ? name : "");
+                            continue;
+                        }
                         response.replace("\"", "\\\"");     //JSON内の文字列を囲む"にエスケープ(\)を付ける
 
                         String json(conversation_item_create);
@@ -286,34 +305,66 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                         json.replace("REPLACE_TO_OUTPUT", response.c_str());
                         Serial.printf("[WSc] function output: %s\n", json.c_str());
                         p_this->webSocket.sendTXT(json);
-                        p_this->webSocket.sendTXT(response_create);
                     }
                 }
 
-                if(isFuncCall){
-                    // function_call response.done skips speaking=false. Keep speaking
-                    // true so follow-up audio can play; kids_tutor_process_pending waits
-                    // for Speaker / grace timeout if the follow-up never arrives.
+                if (modeSwitchRequested && deferredActionRequested) {
+                    camera_action_abandon();
+                    String response = "{\\\"error\\\":\\\"mode switch cancelled the camera request\\\"}";
+                    String json(conversation_item_create);
+                    json.replace("REPLACE_TO_CALL_ID", p_this->deferredFunctionCallId);
+                    json.replace("REPLACE_TO_OUTPUT", response);
+                    p_this->webSocket.sendTXT(json);
+                    p_this->hasDeferredFunctionCall = false;
+                    p_this->deferredFunctionCallId = "";
+                    deferredActionRequested = false;
+                }
+
+                if(deferredActionRequested && !modeSwitchRequested){
+                    last_commit_time = millis();
+                    Serial.println("[WSc] waiting for deferred function result");
+                } else if(isFuncCall && !modeSwitchRequested){
+                    // All function outputs must be present before requesting the
+                    // model's follow-up. Keep the audio handoff until that response
+                    // finishes, then the non-function branch below resumes listening.
+                    p_this->webSocket.sendTXT(response_create);
                     Serial.println("[WSc] function_call done (speaking held for follow-up)");
                 } else {
 #ifndef REALTIME_API_WITH_TTS
                     while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
                     M5.Speaker.end();
-                    M5.Mic.begin();
+                    // A study transition immediately hands I2S to KidsTutor's
+                    // local WAV player. Restarting the mic here creates a fresh
+                    // mic_task only for VoiceLite to tear it down milliseconds
+                    // later, which can race i2s_stop() with Speaker.begin().
+                    if (!modeSwitchRequested) {
+                        M5.Mic.begin();
+                    }
                     exitMutexAudio();
 
-                    // Tap-to-talk mode: leave the microphone idle after each
-                    // completed response. Previously this immediately restarted
-                    // recording, so the next tap toggled that recording *off*
-                    // instead of starting the next turn.
+                    // A normal turn remains inside the conversation session: the
+                    // first tap starts it, each response resumes listening, and the
+                    // existing 30-second recorder timeout returns to tap-to-start.
+                    // A study mode switch must leave the mic idle for RealtimeAiMod::pause().
+                    if (!modeSwitchRequested) {
+                        p_this->startRealtimeRecord();
+                    }
 
                     for(int i=0; i<2; i++){
                         memset(p_this->audioBuf[i], 0, 100 * 1024);
                     }
                     p_this->speaking = false;
 #else
-                    p_this->response_done = true;
+                    if (modeSwitchRequested) {
+                        p_this->response_done = false;
+                        p_this->speaking = false;
+                    } else {
+                        p_this->response_done = true;
+                    }
 #endif
+                    if (modeSwitchRequested) {
+                        Serial.println("[WSc] study mode switch: audio released, follow-up skipped");
+                    }
                 }
             }
             else if(msgType.equals("rate_limits.updated")){
@@ -476,6 +527,26 @@ void RealtimeChatGPT::onWebSocketTick() {
     diag_log("persona reconnect");
     webSocket.disconnect();
     return;
+  }
+
+  // Finish loop-task camera work from the WebSocket task so sendTXT is never
+  // called concurrently with webSocket.loop().
+  if (hasDeferredFunctionCall) {
+    String result;
+    if (camera_action_take_result(result)) {
+      result.replace("\"", "\\\"");
+      String json(conversation_item_create);
+      json.replace("REPLACE_TO_CALL_ID", deferredFunctionCallId);
+      json.replace("REPLACE_TO_OUTPUT", result);
+      Serial.printf("[WSc] deferred function output: %s\n", json.c_str());
+      webSocket.sendTXT(json);
+      hasDeferredFunctionCall = false;
+      deferredFunctionCallId = "";
+      last_commit_time = millis();
+      webSocket.sendTXT(response_create);
+      Serial.println("[WSc] deferred function complete (follow-up requested)");
+      return;
+    }
   }
 
   // (1) Response-timeout watchdog. If a turn/proactive request never produced a

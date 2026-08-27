@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include "mod/ModBase.h"
-#include "TutorEngine.h"
+#include "kids_tutor/TutorEngine.h"
 
 // Start (or switch into) Kids Tutor from voice / web.
 // name: empty/daily/데일리/10분/공부 → Daily; english/영어 → English;

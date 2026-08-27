@@ -11,12 +11,15 @@
 // otherwise) so the web handler and sensor guards can call it unconditionally.
 //
 // Camera SCCB shares the CoreS3 internal I2C bus with the proximity / IMU /
-// power / touch sensors. While a capture is in progress camera_is_busy() is true
-// and those loop-tick sensors skip their I2C reads. Coexistence is UNVERIFIED.
+// power / touch sensors. The loop-side sensor block and camera sessions use the
+// same mutex, while camera_is_busy() lets non-I2C work skip stale sensor input.
 
 void camera_vision_init();
 bool camera_vision_look(const String& hint);   // capture + describe + speak/inject
 String camera_vision_describe(const String& hint);  // capture + describe; empty on failure
 bool camera_is_busy();
+void camera_set_hardware_busy(bool busy);
+void camera_sensor_bus_lock();
+void camera_sensor_bus_unlock();
 
 #endif  // _CAMERA_VISION_H

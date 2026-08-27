@@ -54,4 +54,10 @@ constexpr uint8_t START_LEVEL = 1;
 constexpr uint8_t MAX_LEVEL = 5;
 constexpr uint8_t LEVEL_UP_STREAK = 5;
 constexpr uint8_t WRONG_BEFORE_EXPLAIN = 3;
+constexpr uint8_t TUTOR_SESSION_QUESTION_LIMIT = 10;
 constexpr float VOICE_FUZZY_THRESHOLD = 0.78f;
+
+// M5Unified speaker volume uses a 0..255 scale. These are 80% of the previous
+// KidsTutor-local levels (WAV 180, fallback/listening tone 120).
+constexpr uint8_t TUTOR_WAV_VOLUME = 144;
+constexpr uint8_t TUTOR_TONE_VOLUME = 96;

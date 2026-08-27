@@ -44,6 +44,7 @@ private:
   uint8_t _level = 1;
   uint8_t _wrong = 0;
   uint8_t _streak = 0;
+  uint8_t _completedQuestions = 0;
   uint32_t _stars = 0;
   bool _mixedEnglishNext = true;
   bool _voicePending = false;
@@ -55,8 +56,9 @@ private:
   String _dailyPhaseLabel = "DAILY";
 
   bool loadNext();
-  bool finishDailyIfNeeded();
+  bool finishSessionIfNeeded();
   void buildChoices();
+  void completeCurrentQuestion();
   void render();
   void renderStatus();
   uint8_t currentLevelCap() const;

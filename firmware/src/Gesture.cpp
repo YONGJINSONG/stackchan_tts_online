@@ -4,13 +4,26 @@
 #include <freertos/queue.h>
 #include "Gesture.h"
 #include "Robot.h"
+#include "CameraVision.h"
 
 using namespace m5avatar;
 
 extern volatile uint32_t g_servoManualUntil;   // main.cpp — 웹 조이스틱 수동 머리 제어 중
 
+extern Avatar avatar;
+
 volatile uint32_t gesture_suppress_until = 0;
 static QueueHandle_t gestureQueue = NULL;
+
+enum class GestureCommandType : uint8_t {
+  Expression,
+  Dance,
+};
+
+struct GestureCommand {
+  GestureCommandType type;
+  Expression expression;
+};
 
 struct GestureStep {
   int degX;
@@ -21,6 +34,10 @@ struct GestureStep {
 static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms) {
   if(robot == nullptr || robot->servo == nullptr){
     Serial.println("[gesture] ABORT: robot/servo null");
+    return;
+  }
+  if (camera_is_busy()) {
+    Serial.println("[gesture] skip (camera owns servo GPIO/I2C)");
     return;
   }
   if(millis() < g_servoManualUntil){   // 웹 조이스틱 수동 제어 중엔 제스처로 머리 안 움직임
@@ -41,9 +58,33 @@ static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms)
 }
 
 static void gesture_task(void* arg) {
-  Expression e;
+  GestureCommand command;
   for(;;){
-    if(xQueueReceive(gestureQueue, &e, portMAX_DELAY) != pdTRUE) continue;
+    if(xQueueReceive(gestureQueue, &command, portMAX_DELAY) != pdTRUE) continue;
+
+    if (command.type == GestureCommandType::Dance) {
+#ifdef USE_SERVO
+      Expression previous = avatar.getExpression();
+      avatar.setExpression(Expression::Happy);
+      const GestureStep dance[] = {
+        {-24, -10, 350}, {24, -10, 350},
+        {-18,  12, 350}, {18,  12, 350},
+        {-28,  -5, 300}, {28,  -5, 300},
+        {  0, -18, 300}, { 0,   8, 300},
+        {-20,   0, 300}, {20,   0, 300},
+        {  0,   0, 400},
+      };
+      Serial.println("[gesture] dance started");
+      play_sequence(dance, sizeof(dance) / sizeof(dance[0]), 0);
+      if (avatar.getExpression() == Expression::Happy) {
+        avatar.setExpression(previous);
+      }
+      Serial.println("[gesture] dance finished");
+#endif
+      continue;
+    }
+
+    Expression e = command.expression;
 
     Serial.printf("[gesture] dequeued expression=%d\n", (int)e);
     switch(e){
@@ -86,7 +127,7 @@ static void gesture_task(void* arg) {
 
 void gesture_init() {
   if(gestureQueue != NULL) return;
-  gestureQueue = xQueueCreate(1, sizeof(Expression));
+  gestureQueue = xQueueCreate(1, sizeof(GestureCommand));
   xTaskCreatePinnedToCore(gesture_task, "gesture", 4096, NULL, 1, NULL, APP_CPU_NUM);
   Serial.println("[gesture] task started");
 }
@@ -97,5 +138,30 @@ void gesture_play(Expression e) {
     return;
   }
   Serial.printf("[gesture] play enqueue expression=%d\n", (int)e);
-  xQueueOverwrite(gestureQueue, &e);
+  GestureCommand command{GestureCommandType::Expression, e};
+  xQueueOverwrite(gestureQueue, &command);
+}
+
+bool gesture_dance() {
+#ifndef USE_SERVO
+  Serial.println("[gesture] dance unavailable (servo disabled)");
+  return false;
+#else
+  if (gestureQueue == NULL || robot == nullptr || robot->servo == nullptr) {
+    Serial.println("[gesture] dance unavailable (servo not ready)");
+    return false;
+  }
+  if (millis() < g_servoManualUntil) {
+    Serial.println("[gesture] dance skipped (manual head control)");
+    return false;
+  }
+  if (camera_is_busy()) {
+    Serial.println("[gesture] dance skipped (camera busy)");
+    return false;
+  }
+  GestureCommand command{GestureCommandType::Dance, Expression::Happy};
+  xQueueOverwrite(gestureQueue, &command);
+  Serial.println("[gesture] dance queued");
+  return true;
+#endif
 }

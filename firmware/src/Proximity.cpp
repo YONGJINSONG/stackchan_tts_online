@@ -134,7 +134,13 @@ static bool ltr553_begin() {
     Serial.printf("[prox] LTR-553 part id = 0x%02X (expect 0x92)\n", part);
     if (part != 0x92) {
         // Some revisions differ; also accept "present on bus" as a fallback.
+#if defined(ARDUINO_M5STACK_Core2)
+        // M5Unified 0.2.7 (pinned by the Core2 environment) exposes only the
+        // one-argument scanID overload. Register reads/writes still use freq.
+        if (!M5.In_I2C.scanID(LTR553_ADDR)) {
+#else
         if (!M5.In_I2C.scanID(LTR553_ADDR, LTR553_I2C_FREQ)) {
+#endif
             Serial.println("[prox] LTR-553 not found on internal I2C — proximity disabled");
             return false;
         }

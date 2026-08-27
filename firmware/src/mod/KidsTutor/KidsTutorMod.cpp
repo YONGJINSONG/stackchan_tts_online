@@ -6,10 +6,10 @@
 #include "mod/ModManager.h"
 #include "usage_timer.h"
 #include "share/SdBus.h"
-#include "QuestionDB.h"
-#include "StackchanUI.h"
-#include "LearningManager.h"
-#include "TutorConfig.h"
+#include "kids_tutor/QuestionDB.h"
+#include "kids_tutor/StackchanUI.h"
+#include "kids_tutor/LearningManager.h"
+#include "kids_tutor/TutorConfig.h"
 #include "Robot.h"
 #if defined(REALTIME_API)
 #include "llm/RealtimeLLMBase.h"
@@ -37,11 +37,6 @@ bool g_math6Loaded = false;
 portMUX_TYPE g_voiceStartMux = portMUX_INITIALIZER_UNLOCKED;
 bool g_voiceStartPending = false;
 TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
-uint32_t g_voiceStartQueuedAt = 0;
-// After play_sd_content, Realtime leaves speaking=true (input committed) until a
-// follow-up response.done. If that never clears / never plays audio, pending
-// study would soft-hang forever without this grace/timeout.
-constexpr uint32_t kKidsFollowupGraceMs = 4000;
 }
 
 KidsTutorMod::KidsTutorMod() {
@@ -113,11 +108,11 @@ void KidsTutorMod::beginSession(TutorEngine::Subject subject) {
     g_ui.showMessage("ERROR", err);
     return;
   }
-  // Realtime may leave Speaker owning I2S after a stuck speaking flag — free it
-  // before KidsTutor local WAV playback.
+  // Realtime has already released I2S for a deferred mode switch. Keep the mic
+  // stopped: the first local WAV would otherwise tear down a newly-created
+  // mic_task immediately and can crash inside i2s_stop().
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
-  M5.Mic.begin();
   pauseUsageTimer();
   Serial.printf("[kids] beginSession subject=%d\n", (int)subject);
   _session = g_tutor.start(subject);
@@ -256,7 +251,6 @@ String kids_tutor_start_by_name(const char* name) {
   // that same task in the middle of its WebSocket callback.
   portENTER_CRITICAL(&g_voiceStartMux);
   g_voiceStartSubject = sub;
-  g_voiceStartQueuedAt = millis();
   g_voiceStartPending = true;
   portEXIT_CRITICAL(&g_voiceStartMux);
   Serial.println("[kids] voice start queued");
@@ -272,33 +266,20 @@ void kids_tutor_process_pending() {
   if (g_kidsTutorMod == nullptr) return;
 
   bool pending = false;
-  uint32_t queuedAt = 0;
   TutorEngine::Subject subject = TutorEngine::Subject::Daily;
   portENTER_CRITICAL(&g_voiceStartMux);
   pending = g_voiceStartPending;
-  queuedAt = g_voiceStartQueuedAt;
   subject = g_voiceStartSubject;
   portEXIT_CRITICAL(&g_voiceStartMux);
   if (!pending) return;
 
 #if defined(REALTIME_API)
-  // Let the function-output follow-up response finish before pausing Realtime.
-  // Bug: function_call response.done skips speaking=false, so a tool-only turn
-  // can leave speaking stuck true with no audio → soft-hang without a grace.
+  // The WebSocket task that owns the audio mutex finishes the current response
+  // and releases Speaker/Mic before clearing speaking. Never force that state
+  // from this main-loop task: doing so can strand the non-recursive audio mutex.
   if (robot && robot->llm) {
     RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
-    if (rt->isSpeaking()) {
-      if (M5.Speaker.isPlaying()) return;
-      uint32_t waited = millis() - queuedAt;
-      if (waited < kKidsFollowupGraceMs) return;
-      Serial.printf("[kids] speaking stuck %ums (no audio) — forcing study open\n",
-                    (unsigned)waited);
-      rt->setSpeaking(false);
-#ifndef REALTIME_API_WITH_TTS
-      M5.Speaker.end();
-      M5.Mic.begin();
-#endif
-    }
+    if (rt->isSpeaking()) return;
   }
 #endif
 

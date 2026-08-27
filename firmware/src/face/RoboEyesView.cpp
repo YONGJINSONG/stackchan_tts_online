@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <Avatar.h>                 // m5avatar::Expression, Avatar (getExpression)
 #include "face/RoboEyesView.h"
+#include "PetReaction.h"
 #include "NightMode.h"              // night_mode_is_night() — 수면/밤모드 눈 감기
 #include "Sfx.h"                    // 감정/취침·기상 효과음 이벤트
 // ⚠️ FluxGarage_RoboEyes.h 는 전역변수(BGCOLOR/MAINCOLOR) + 매크로(DEFAULT/ON/OFF/N/E/S/W..)를
@@ -261,6 +262,11 @@ void roboeyes_view_render() {
 
     // 시선↔서보: 눈 목표 위치 → avatar gaze. 서보 태스크가 servo_home=false(발화 중)일 때
     // 머리로 따라감(서보 루프 2초 주기라 안 떨림). idle 중엔 servo_home=true 라 머리 정지.
+    if (pet_reaction_blush_active()) {
+      g_cv->fillEllipse(72, 158, 25, 10, 0xF98F);
+      g_cv->fillEllipse(248, 158, 25, 10, 0xF98F);
+    }
+
     float cx = g_eyes.getScreenConstraint_X() * 0.5f;
     float cy = g_eyes.getScreenConstraint_Y() * 0.5f;
     float h = (cx > 0.5f) ? (g_eyes.eyeLxNext - cx) / cx : 0.0f;

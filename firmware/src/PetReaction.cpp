@@ -54,9 +54,9 @@ static void clampConfig(PetConfig& c) {
 
 static bool is_speaking() {
 #if defined(REALTIME_API)
-    if (robot && robot->llm) return ((RealtimeLLMBase*)(robot->llm))->getAudioLevel() > 200;
+    if (robot && robot->llm && robot->llm->isSpeaking()) return true;
 #endif
-    return false;
+    return M5.Speaker.isPlaying();
 }
 
 static void load_from_spiffs() {
@@ -131,6 +131,12 @@ bool pet_reaction_set_json(const String& json) {
 // Shared cooldown across IMU and touch-stroke triggers.
 static uint32_t g_lastPetMs = 0;
 static uint32_t g_lastSpeakMs = 0;
+static uint32_t g_blushUntilMs = 0;
+static Expression g_expressionBeforePet = Expression::Neutral;
+
+bool pet_reaction_blush_active() {
+    return g_blushUntilMs != 0 && (int32_t)(g_blushUntilMs - millis()) > 0;
+}
 
 // Run the happy "pet me" reaction now. Respects enabled + a 3s cooldown.
 // Called from pet_reaction_tick() (IMU) and from the touch-stroke handler.
@@ -149,17 +155,19 @@ bool pet_reaction_fire() {
 
     uint32_t now = millis();
     if (now - g_lastPetMs < 3000) return false;   // cooldown
-    if (is_speaking()) return false;
+    bool speakerBusy = is_speaking();
     g_lastPetMs = now;
 
-    Serial.println("[pet] reaction fired");
+    g_expressionBeforePet = avatar.getExpression();
+    g_blushUntilMs = now + 2500;
+    Serial.printf("[pet] reaction fired (speakerBusy=%d)\n", speakerBusy ? 1 : 0);
     avatar.setExpression(Expression::Happy);
     gesture_play(Expression::Happy);
-    sfx_play_event("pet");       // optional SD sound effect bound to the "pet" event; skipped if missing/busy
+    if (!speakerBusy) sfx_play_event("pet");
     idle_motion_hold(2500);
     idle_talk_note_activity();   // count as interaction
 
-    if (speakOnPet && !isOffline && prompt.length() && (now - g_lastSpeakMs > 15000)) {
+    if (!speakerBusy && speakOnPet && !isOffline && prompt.length() && (now - g_lastSpeakMs > 15000)) {
 #if defined(REALTIME_API)
         if (robot && robot->llm) {
             ((RealtimeLLMBase*)(robot->llm))->pushUserText(prompt);
@@ -171,6 +179,13 @@ bool pet_reaction_fire() {
 }
 
 void pet_reaction_tick() {
+    if (g_blushUntilMs != 0 && !pet_reaction_blush_active()) {
+        if (avatar.getExpression() == Expression::Happy) {
+            avatar.setExpression(g_expressionBeforePet);
+        }
+        g_blushUntilMs = 0;
+        Serial.println("[pet] blush finished");
+    }
     if (!g_detected) return;
     if (camera_is_busy()) return;   // camera owns the internal I2C during capture
 

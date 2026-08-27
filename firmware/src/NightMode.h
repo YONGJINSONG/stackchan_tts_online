@@ -20,4 +20,8 @@ String night_mode_get_json();
 bool   night_mode_set_json(const String& json);
 void   night_mode_force_sleep(bool sleep);   // voice "잘자"→true(취침), "일어나"→false(스케줄 복귀)
 
+void   night_mode_set_display_power(bool on);
+bool   night_mode_display_is_off();
+bool   night_mode_wake_display();
+
 #endif  // _NIGHT_MODE_H

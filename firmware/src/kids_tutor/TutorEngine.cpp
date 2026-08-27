@@ -38,6 +38,7 @@ bool TutorEngine::start(Subject subject) {
   _subject = subject;
   _wrong = 0;
   _streak = 0;
+  _completedQuestions = 0;
   _stars = 0;
   _mixedEnglishNext = true;
   _voicePending = false;
@@ -161,7 +162,6 @@ String TutorEngine::subjectName() const {
   if (_subject == Subject::Daily) {
     String label = _currentIsReview ? "REVIEW" : _dailyPhaseLabel;
     if (_current.levelCode.length()) label += " " + _current.levelCode;
-    if (_learning) label += " " + String(_learning->remainingSeconds()/60) + ":" + String((_learning->remainingSeconds()%60 + 100)).substring(1);
     return label;
   }
   if (_subject == Subject::English) return "ENGLISH";
@@ -171,33 +171,76 @@ String TutorEngine::subjectName() const {
 }
 
 void TutorEngine::buildChoices() {
-  _displayChoices = _current.choices;
-  if (!_displayChoices.empty()) {
-    if (_displayChoices.size() > 4) _displayChoices.resize(4);
-    return;
+  _displayChoices.clear();
+
+  auto containsEquivalent = [this](const std::vector<String>& values, const String& value) {
+    for (const auto& item : values) if (answersEqual(item, value)) return true;
+    return false;
+  };
+  auto appendUnique = [this, &containsEquivalent](std::vector<String>& values, const String& value) {
+    String candidate = value;
+    candidate.trim();
+    if (!candidate.length() || containsEquivalent(values, candidate)) return;
+    values.push_back(candidate);
+  };
+  auto shuffle = [](std::vector<String>& values) {
+    for (int i = (int)values.size() - 1; i > 0; --i) {
+      int j = random(i + 1);
+      std::swap(values[i], values[j]);
+    }
+  };
+
+  // Keep the database spelling/format of the correct option when it exists.
+  String correct = _current.answer;
+  std::vector<String> distractors;
+  for (const auto& choice : _current.choices) {
+    if (answersEqual(choice, _current.answer)) correct = choice;
+    else appendUnique(distractors, choice);
   }
+  shuffle(distractors);
+
+  appendUnique(_displayChoices, correct);
+  for (const auto& distractor : distractors) {
+    if (_displayChoices.size() >= 3) break;
+    appendUnique(_displayChoices, distractor);
+  }
+
   if (_current.answerType == "number") {
-    int v = _current.answer.toInt();
-    std::vector<int> nums = {max(0, v-1), v, v+1, v+2};
-    std::vector<int> unique;
-    for (int n : nums) if (std::find(unique.begin(), unique.end(), n) == unique.end()) unique.push_back(n);
-    while (unique.size() < 4) unique.push_back(v + (int)unique.size() + 1);
-    for (int i=(int)unique.size()-1;i>0;--i) { int j=random(i+1); std::swap(unique[i],unique[j]); }
-    for (int n : unique) _displayChoices.push_back(String(n));
+    const int value = _current.answer.toInt();
+    const int candidates[] = {max(0, value - 1), value + 1, value + 2, max(0, value - 2), value + 3};
+    for (int candidate : candidates) {
+      if (_displayChoices.size() >= 3) break;
+      appendUnique(_displayChoices, String(candidate));
+    }
   } else {
-    _displayChoices.push_back(_current.answer);
-    _displayChoices.push_back("I don't know");
-    _displayChoices.push_back("Try again");
+    const char* fallbacks[] = {"I don't know", "Try again", "Not this one"};
+    for (const char* fallback : fallbacks) {
+      if (_displayChoices.size() >= 3) break;
+      appendUnique(_displayChoices, String(fallback));
+    }
   }
+
+  shuffle(_displayChoices);
 }
 
-bool TutorEngine::finishDailyIfNeeded() {
-  if (_subject != Subject::Daily || !_learning || !_learning->sessionExpired()) return false;
-  _learning->finishDaily(_level, _stars);
+bool TutorEngine::finishSessionIfNeeded() {
+  if (_sessionComplete) return true;
+  const bool questionLimitReached = _completedQuestions >= TUTOR_SESSION_QUESTION_LIMIT;
+  const bool dailyTimeExpired = _subject == Subject::Daily && _learning && _learning->sessionExpired();
+  if (!questionLimitReached && !dailyTimeExpired) return false;
+
+  if (_subject == Subject::Daily && _learning) _learning->finishDaily(_level, _stars);
   _ui->drawFace(FaceMood::Happy);
-  _ui->showMessage("10 MIN DONE!", "Report: /kids_tutor/reports/latest_report.html");
+  if (_subject == Subject::Daily) {
+    _ui->showMessage(questionLimitReached ? "10 QUESTIONS DONE!" : "TIME'S UP!",
+                     "Report: /kids_tutor/reports/latest_report.html");
+  } else {
+    _ui->showMessage("10 QUESTIONS DONE!", "Great work!");
+  }
   _ui->nod();
-  _ui->speak(_learning->completionSpeech(), "ko");
+  // Daily already has a prepared local completion WAV. Free-study sessions
+  // have just played their final feedback, so avoid requesting a missing clip.
+  if (_subject == Subject::Daily && _learning) _ui->speak(_learning->completionSpeech(), "ko");
   delay(3000);
   _sessionComplete = true;
   _voicePending = false;
@@ -205,7 +248,7 @@ bool TutorEngine::finishDailyIfNeeded() {
 }
 
 bool TutorEngine::loadNext() {
-  if (finishDailyIfNeeded()) return false;
+  if (finishSessionIfNeeded()) return false;
 
   bool loaded = false;
   // SD reads must be isolated from the CoreS3 LCD bus. Rendering happens only
@@ -232,7 +275,7 @@ bool TutorEngine::loadNext() {
   }
   sd_bus_unlock();
   if (!loaded) {
-    if (_subject == Subject::Daily && _learning && _learning->sessionExpired()) return !finishDailyIfNeeded();
+    if (finishSessionIfNeeded()) return false;
     return false;
   }
 
@@ -251,17 +294,27 @@ bool TutorEngine::loadNext() {
 void TutorEngine::render() {
   uint8_t displayLevel = (_subject == Subject::Daily) ? _current.level : _level;
   _shownRemaining = (_subject == Subject::Daily && _learning) ? _learning->remainingSeconds() : 0;
-  _ui->showQuestion(_current, _displayChoices, _selected, subjectName(), displayLevel, _stars);
+  const uint8_t questionNumber = (_completedQuestions + 1 < TUTOR_SESSION_QUESTION_LIMIT)
+                                   ? _completedQuestions + 1 : TUTOR_SESSION_QUESTION_LIMIT;
+  const uint32_t remaining = (_subject == Subject::Daily && _learning)
+                               ? _learning->remainingSeconds() : 0xffffffffUL;
+  _ui->showQuestion(_current, _displayChoices, _selected, subjectName(), displayLevel, _stars,
+                    questionNumber, TUTOR_SESSION_QUESTION_LIMIT, remaining);
 }
 
 void TutorEngine::renderStatus() {
   uint8_t displayLevel = (_subject == Subject::Daily) ? _current.level : _level;
-  _ui->showStatusLine(subjectName(), displayLevel, _stars);
+  const uint8_t questionNumber = (_completedQuestions + 1 < TUTOR_SESSION_QUESTION_LIMIT)
+                                   ? _completedQuestions + 1 : TUTOR_SESSION_QUESTION_LIMIT;
+  const uint32_t remaining = (_subject == Subject::Daily && _learning)
+                               ? _learning->remainingSeconds() : 0xffffffffUL;
+  _ui->showStatusLine(subjectName(), displayLevel, _stars, questionNumber,
+                      TUTOR_SESSION_QUESTION_LIMIT, remaining);
 }
 
 void TutorEngine::tick() {
   if (_subject != Subject::Daily || !_learning || _grading || _sessionComplete) return;
-  if (finishDailyIfNeeded()) return;
+  if (finishSessionIfNeeded()) return;
   uint32_t remaining = _learning->remainingSeconds();
   if (remaining == _shownRemaining) return;
   _shownRemaining = remaining;
@@ -290,6 +343,13 @@ void TutorEngine::submitChoice() {
 
 void TutorEngine::requestVoiceRetry() {
   if (_ui && _ui->voiceReady()) _voicePending = true;
+}
+
+void TutorEngine::completeCurrentQuestion() {
+  if (_completedQuestions < TUTOR_SESSION_QUESTION_LIMIT) _completedQuestions++;
+  Serial.printf("[TUTOR] completed=%u/%u subject=%d\n",
+                (unsigned)_completedQuestions, (unsigned)TUTOR_SESSION_QUESTION_LIMIT,
+                (int)_subject);
 }
 
 void TutorEngine::pollVoice() {
@@ -327,6 +387,7 @@ void TutorEngine::gradeAnswer(const String& answer, bool fromVoice) {
       _ui->speak(isEnglishQuestion() ? "Level up! Great job!" : "레벨 업! 잘했어!", languageHint());
       delay(450);
     }
+    completeCurrentQuestion();
     _grading = false;
     loadNext();
     return;
@@ -352,6 +413,7 @@ void TutorEngine::gradeAnswer(const String& answer, bool fromVoice) {
     if (_subject == Subject::Daily && _learning)
       _learning->noteQuestionFinished(_current, _currentEnglish, _currentIsReview, false, _wrong, answer);
     if (_subject != Subject::Daily && _level > 1) _level--;
+    completeCurrentQuestion();
     _grading = false;
     loadNext();
   } else {
@@ -366,5 +428,6 @@ void TutorEngine::skip() {
   _streak = 0;
   if (_subject == Subject::Daily && _learning)
     _learning->noteQuestionFinished(_current, _currentEnglish, _currentIsReview, false, 1, "SKIPPED");
+  completeCurrentQuestion();
   loadNext();
 }

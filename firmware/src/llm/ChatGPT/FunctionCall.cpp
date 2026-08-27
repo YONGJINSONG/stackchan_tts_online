@@ -29,6 +29,7 @@
 #include "MCPClient.h"
 #include "llm/LLMBase.h"
 #include "Gesture.h"
+#include "CameraAction.h"
 using namespace m5avatar;
 
 
@@ -196,6 +197,22 @@ const String json_Functions =
     "}"
   "},"
   "{"
+    "\"name\": \"dance\","
+    "\"description\": \"사용자가 춤춰 달라고 하면 호출한다. Stack-chan이 약 4초 동안 안전한 범위에서 춤을 춘다.\","
+    "\"parameters\": { \"type\":\"object\", \"properties\": {} }"
+  "},"
+  "{"
+    "\"name\": \"set_display_power\","
+    "\"description\": \"Stack-chan 화면 또는 모니터 불을 켜거나 꺼 달라는 요청에 호출한다. 절전 모드와 별개이며 화면 백라이트만 제어한다.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"on\":{ \"type\": \"boolean\", \"description\": \"true=화면 켜기, false=화면 끄기\" }"
+      "},"
+      "\"required\": [\"on\"]"
+    "}"
+  "},"
+  "{"
     "\"name\": \"set_sleep_mode\","
     "\"description\": \"사용자가 '잘자', '굿나잇', '이제 잘게' 처럼 자러 간다고 하면 sleep=true로 호출해 취침 모드(화면 어둡게+졸린 분위기)에 들어간다. '일어나', '굿모닝', '깨어나'처럼 깨우면 sleep=false로 호출해 평소 모드로 돌아온다. 호출 후엔 짧게 한국어로 다정하게 반응한다(예: '잘 자, 좋은 꿈 꿔').\","
     "\"parameters\": {"
@@ -338,7 +355,9 @@ void powerOffTimerCallback(TimerHandle_t _xTimer){
 FunctionCall::FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient)
   : _param(param),
     _llm(llm),
-    _mcpClient(mcpClient)
+    _mcpClient(mcpClient),
+    _modeSwitchRequested(false),
+    _deferredActionRequested(false)
 {
 
 }
@@ -352,6 +371,8 @@ void FunctionCall::init_func_call_settings(StackchanExConfig& system_config)
 
 String FunctionCall::exec_calledFunc(const char* name, const char* args){
   String response = "";
+  _modeSwitchRequested = false;
+  _deferredActionRequested = false;
 
   Serial.println(name);
   Serial.println(args);
@@ -450,6 +471,18 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       diag_log("[sfx] play_sound tool called name='%s' matched=%d", sname ? sname : "", (int)ok);
       response = ok ? "{\"result\":\"재생할게요.\"}" : "{\"result\":\"그 이름의 사운드를 찾지 못했어요. 등록된 효과음이 없거나 이름이 달라요.\"}";
     }
+    else if(strcmp(name, "dance") == 0){
+      response = gesture_dance()
+        ? "{\"result\":\"춤을 시작했어요.\"}"
+        : "{\"error\":\"서보가 준비되지 않았거나 수동 조작 중이에요.\"}";
+    }
+    else if(strcmp(name, "set_display_power") == 0){
+      bool on = argsDoc["on"] | true;
+      night_mode_set_display_power(on);
+      response = on
+        ? "{\"result\":\"화면을 켰어요.\"}"
+        : "{\"result\":\"화면을 껐어요.\"}";
+    }
     else if(strcmp(name, "set_sleep_mode") == 0){
       bool sleep = argsDoc["sleep"] | true;
       night_mode_force_sleep(sleep);
@@ -467,7 +500,9 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
     else if(strcmp(name, "play_sd_content") == 0){
       const char* ctype = argsDoc["content_type"];
       const char* cname = argsDoc["name"] | "";
-      response = play_sd_content(ctype ? ctype : "music", cname);
+      const char* resolvedType = ctype ? ctype : "music";
+      response = play_sd_content(resolvedType, cname);
+      _modeSwitchRequested = strcmp(resolvedType, "study_program") == 0;
     }
 #if defined(ENABLE_CAMERA)
     else if(strcmp(name, "take_photo") == 0){
@@ -494,6 +529,18 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
 
 END:
   return response;
+}
+
+bool FunctionCall::consumeModeSwitchRequest() {
+  bool requested = _modeSwitchRequested;
+  _modeSwitchRequested = false;
+  return requested;
+}
+
+bool FunctionCall::consumeDeferredActionRequest() {
+  bool requested = _deferredActionRequested;
+  _deferredActionRequested = false;
+  return requested;
 }
 
 
@@ -1403,34 +1450,15 @@ String FunctionCall::play_sd_content(const char* content_type, const char* name)
 }
 
 #if defined(ENABLE_CAMERA)
-// PhotoFrame と同じく SD→RAM→サブ窓。CoreS3 は SD/LCD SPI 共有のため lock 必須。
-static bool preview_saved_photo(String& path) {
-  bool ok = false;
-  sd_bus_lock();
-  ok = avatar.updateSubWindowJpg(path);
-  sd_bus_unlock();
-  if (ok) {
-    avatar.set_isSubWindowEnable(true);
-    Serial.printf("[photo-preview] subwindow ok: %s\n", path.c_str());
-  } else {
-    Serial.printf("[photo-preview] load failed: %s\n", path.c_str());
-  }
-  return ok;
-}
-
+// Capture itself is deferred to loop(); the result is returned after SD save/preview completes.
 String FunctionCall::take_photo(const char* output) {
   String mode = output ? String(output) : String("save");
   if (mode == "save") {
-    String path;
-    if (camera_capture_save_sd(path)) {
-      bool shown = preview_saved_photo(path);
-      String res = String("{\"result\":\"사진을 저장했어요.\",\"path\":\"") + path + "\"";
-      if (shown) res += ",\"preview\":true";
-      else res += ",\"preview\":false";
-      res += "}";
-      return res;
+    if (!camera_action_request_save()) {
+      return "{\"error\":\"카메라가 이미 다른 요청을 처리하고 있어요.\"}";
     }
-    return "{\"error\":\"사진 촬영에 실패했어요.\"}";
+    _deferredActionRequested = true;
+    return "";
   }
   if (mode == "recognize_object") {
     String desc = camera_vision_describe(String("이 이미지에 보이는 것을 한국어로 한두 문장으로, 아이가 이해하기 쉽게 설명해줘."));

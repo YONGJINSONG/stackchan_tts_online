@@ -35,6 +35,9 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     // (WS task) performs the actual disconnect so the next session uses the new role.
     volatile bool reconnectRequest = false;
 
+    volatile bool hasDeferredFunctionCall = false;
+    String deferredFunctionCallId;
+
 public:
     RealtimeChatGPT(llm_param_t param);
 

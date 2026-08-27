@@ -36,12 +36,16 @@ private:
     llm_param_t _param;
     LLMBase* _llm;
     MCPClient** _mcpClient;
+    bool _modeSwitchRequested;
+    bool _deferredActionRequested;
 
 public:
     FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient = nullptr);
 
     void init_func_call_settings(StackchanExConfig& system_config);
     String exec_calledFunc(const char* name, const char* args);
+    bool consumeModeSwitchRequest();
+    bool consumeDeferredActionRequest();
     
 
     // Functions for Function Calling

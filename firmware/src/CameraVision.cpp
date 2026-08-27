@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "CameraVision.h"
 #include "Robot.h"
 #if defined(REALTIME_API)
@@ -14,19 +16,33 @@
 
 extern bool isOffline;
 
-static volatile bool s_busy = false;
-bool camera_is_busy() { return s_busy; }
-void camera_vision_init() {}
+static volatile bool s_hardware_busy = false;
+static volatile bool s_vision_busy = false;
+static SemaphoreHandle_t s_sensor_bus_mutex = nullptr;
+bool camera_is_busy() { return s_hardware_busy; }
+void camera_set_hardware_busy(bool busy) { s_hardware_busy = busy; }
+void camera_sensor_bus_lock() {
+    if (s_sensor_bus_mutex == nullptr) {
+        s_sensor_bus_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_sensor_bus_mutex != nullptr) xSemaphoreTake(s_sensor_bus_mutex, portMAX_DELAY);
+}
+void camera_sensor_bus_unlock() {
+    if (s_sensor_bus_mutex != nullptr) xSemaphoreGive(s_sensor_bus_mutex);
+}
+void camera_vision_init() {
+    if (s_sensor_bus_mutex == nullptr) s_sensor_bus_mutex = xSemaphoreCreateMutex();
+}
 
 String camera_vision_describe(const String& hint) {
 #if defined(ENABLE_CAMERA)
     if (isOffline || robot == nullptr || robot->llm == nullptr) return String();
-    if (s_busy) return String();
-    s_busy = true;
+    if (s_vision_busy) return String();
+    s_vision_busy = true;
 
     String b64;
     bool ok = camera_capture_base64(b64);
-    if (!ok || b64.length() == 0) { s_busy = false; Serial.println("[vision] capture failed"); return String(); }
+    if (!ok || b64.length() == 0) { s_vision_busy = false; Serial.println("[vision] capture failed"); return String(); }
 
     String p = hint.length() ? hint
                              : String("이 이미지에 보이는 것을 한국어로 한 문장으로 아주 간단히 설명해줘.");
@@ -47,7 +63,7 @@ String camera_vision_describe(const String& hint) {
     HTTPClient https;
     https.setTimeout(15000);
     if (!https.begin(client, "https://api.openai.com/v1/chat/completions")) {
-        s_busy = false; Serial.println("[vision] https begin failed"); return String();
+        s_vision_busy = false; Serial.println("[vision] https begin failed"); return String();
     }
     https.addHeader("Content-Type", "application/json");
     https.addHeader("Authorization", String("Bearer ") + robot->llm->param.api_key);
@@ -55,7 +71,7 @@ String camera_vision_describe(const String& hint) {
     String resp = (code > 0) ? https.getString() : String("");
     https.end();
     body = String();
-    s_busy = false;
+    s_vision_busy = false;
 
     if (code != 200) {
         Serial.printf("[vision] HTTP %d: %s\n", code, resp.substring(0, 160).c_str());

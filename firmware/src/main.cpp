@@ -19,6 +19,8 @@
 #include "TouchReaction.h"
 #include "BatteryReaction.h"
 #include "NightMode.h"
+#include "CameraVision.h"
+#include "CameraAction.h"
 #include "Proximity.h"
 #include "WifiConfig.h"
 #include "WifiSetupPortal.h"
@@ -600,6 +602,7 @@ void setup()
 #endif
 
   initMutex();
+  camera_vision_init();
 
 #if defined(ENABLE_SD_UPDATER)
   // ***** for SD-Updater *********************
@@ -780,11 +783,6 @@ void setup()
   // on first boot so the existing family persona is preserved. Needs robot->llm ready.
   persona_init();
 
-#if defined(ENABLE_CAMERA)
-  camera_init();
-  avatar.set_isSubWindowEnable(true);
-#endif
-
 #if defined(ENABLE_TAP_DETECT)
   invokeDoubleTapDetectTask();
 #endif
@@ -826,20 +824,30 @@ void setup()
 void loop()
 {
   //get_elapsed_time_micro("loop() start");
-  M5.update();
+  bool cameraBusy = camera_is_busy();
   //get_elapsed_time_micro("M5.update time");
 
   // Sensor polling — kept on the main loop (right after M5.update) so all
   // internal-I2C access (proximity LTR-553, IMU, backlight) stays serialized
   // with the framework and never races on the shared bus. Each is self-throttled.
-  proximity_tick();
-  pet_reaction_tick();
-  touch_reaction_tick();
-  battery_reaction_tick();
-  night_mode_tick();
+  bool touchConsumed = false;
+  if (!cameraBusy) {
+    camera_sensor_bus_lock();
+    cameraBusy = camera_is_busy();
+    if (!cameraBusy) {
+      M5.update();
+      proximity_tick();
+      pet_reaction_tick();
+      touchConsumed = touch_reaction_tick();
+      battery_reaction_tick();
+      night_mode_tick();
+    }
+    camera_sensor_bus_unlock();
+  }
   idle_talk_tick();   // proactive speech (kept on main loop for WS-write safety)
   checkUsageTimer();
   kids_tutor_process_pending();  // defer Realtime function-call UI/SD work to this task
+  camera_action_process_pending();
 
   ModBase* mod = get_current_mod();
   mod->idle();
@@ -871,14 +879,22 @@ void loop()
   }
 
 #if defined(ARDUINO_M5STACK_Core2) || defined( ARDUINO_M5STACK_CORES3 )
-  auto count = M5.Touch.getCount();
+  auto count = (cameraBusy || camera_is_busy()) ? 0 : M5.Touch.getCount();
   if (count)
   {
     auto t = M5.Touch.getDetail();
     // A flick switches modes; a tap (release without flick) goes to the mod.
     // Splitting them this way means a swipe to leave the photo frame no longer
     // gets eaten as a "next photo" tap — flick = mode switch only, tap = mod action.
-    if (t.wasFlicked())
+    if ((t.wasFlicked() || t.wasReleased()) && night_mode_wake_display())
+    {
+      // First touch after an explicit display-off request only wakes the LCD.
+    }
+    else if (touchConsumed)
+    {
+      // A pet stroke owns its release; do not toggle recording or change mode.
+    }
+    else if (t.wasFlicked())
     {
       int16_t dx = t.distanceX();
       int16_t dy = t.distanceY();

@@ -283,14 +283,12 @@ bool LearningManager::sessionExpired() const {
 
 String LearningManager::currentPhaseLabel() const {
   if (!_dailyActive) return "DAILY";
-  uint32_t e = (millis() - _sessionStartMs) / 1000UL;
-  if (e < _warmupSeconds) return "REVIEW";
-  e -= _warmupSeconds;
-  if (e < _englishSeconds) return "ENGLISH";
-  e -= _englishSeconds;
-  if (e < _somaSeconds) return "SOMA";
-  e -= _somaSeconds;
-  if (e < _factoSeconds) return "FACTO";
+  // Preserve the old 1:3:3:2:1 daily balance, but drive it by question count
+  // so a child who answers quickly still reaches every learning track.
+  if (_questionSerial <= 1) return "REVIEW";
+  if (_questionSerial <= 4) return "ENGLISH";
+  if (_questionSerial <= 7) return "SOMA";
+  if (_questionSerial <= 9) return "FACTO";
   return "REVIEW";
 }
 
@@ -326,10 +324,10 @@ bool LearningManager::nextDailyQuestion(uint8_t level, const String& avoidId, Qu
   phaseLabel = currentPhaseLabel();
   isReview = false;
 
-  uint32_t elapsed = (millis() - _sessionStartMs) / 1000UL;
+  const uint32_t questionNumber = _questionSerial;
   String category;
 
-  if (elapsed < _warmupSeconds) {
+  if (questionNumber == 1) {
     if (_adaptive.pickDueReview(nowEpoch(), false, out, category)) {
       isReview = true;
       isEnglish = (category == "english");
@@ -345,28 +343,25 @@ bool LearningManager::nextDailyQuestion(uint8_t level, const String& avoidId, Qu
     return chooseAdaptiveQuestion(category, avoidId, out, isReview);
   }
 
-  elapsed -= _warmupSeconds;
-  if (elapsed < _englishSeconds) {
+  if (questionNumber <= 4) {
     category = "english";
     isEnglish = true;
     return chooseAdaptiveQuestion(category, avoidId, out, isReview);
   }
 
-  elapsed -= _englishSeconds;
-  if (elapsed < _somaSeconds) {
+  if (questionNumber <= 7) {
     category = "math_somamath";
     isEnglish = false;
     return chooseAdaptiveQuestion(category, avoidId, out, isReview);
   }
 
-  elapsed -= _somaSeconds;
-  if (elapsed < _factoSeconds) {
+  if (questionNumber <= 9) {
     category = "math_facto";
     isEnglish = false;
     return chooseAdaptiveQuestion(category, avoidId, out, isReview);
   }
 
-  // Last minute: prioritize box-1 items made during this session, then any due review.
+  // Question 10: prioritize box-1 items made during this session, then any due review.
   if (_adaptive.pickDueReview(nowEpoch(), true, out, category) ||
       _adaptive.pickDueReview(nowEpoch(), false, out, category)) {
     isReview = true;
