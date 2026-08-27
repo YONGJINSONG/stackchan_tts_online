@@ -58,6 +58,7 @@ public:
             DrawContext *drawContext) override;
 
   void set_isDrawEnable(bool _isDrawEnable);
+  bool isEnabled() const { return isDrawEnable; }
   void updateDrawContentCam565(uint8_t* buf);
   bool updateDrawContentJpg(String& fname);
   void updateDrawContentTxt(String txt);

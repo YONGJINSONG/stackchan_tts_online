@@ -1368,12 +1368,32 @@ String FunctionCall::play_sd_content(const char* content_type, const char* name)
 }
 
 #if defined(ENABLE_CAMERA)
+// PhotoFrame と同じく SD→RAM→サブ窓。CoreS3 は SD/LCD SPI 共有のため lock 必須。
+static bool preview_saved_photo(String& path) {
+  bool ok = false;
+  sd_bus_lock();
+  ok = avatar.updateSubWindowJpg(path);
+  sd_bus_unlock();
+  if (ok) {
+    avatar.set_isSubWindowEnable(true);
+    Serial.printf("[photo-preview] subwindow ok: %s\n", path.c_str());
+  } else {
+    Serial.printf("[photo-preview] load failed: %s\n", path.c_str());
+  }
+  return ok;
+}
+
 String FunctionCall::take_photo(const char* output) {
   String mode = output ? String(output) : String("save");
   if (mode == "save") {
     String path;
     if (camera_capture_save_sd(path)) {
-      return String("{\"result\":\"사진을 저장했어요.\",\"path\":\"") + path + "\"}";
+      bool shown = preview_saved_photo(path);
+      String res = String("{\"result\":\"사진을 저장했어요.\",\"path\":\"") + path + "\"";
+      if (shown) res += ",\"preview\":true";
+      else res += ",\"preview\":false";
+      res += "}";
+      return res;
     }
     return "{\"error\":\"사진 촬영에 실패했어요.\"}";
   }

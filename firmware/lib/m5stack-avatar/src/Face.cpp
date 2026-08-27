@@ -152,6 +152,24 @@ void Face::draw(DrawContext *ctx) {
     subWindow->draw(tmpSprite, rect, ctx);
 
     tmpSprite->pushSprite(&M5.Display, 0, 0);
+  } else if (subWindow && subWindow->isEnabled()) {
+    // scale/rotation 0 でもサブ窓(JPEGプレビュー等)を合成する
+    tmpSprite->setBitmapColor(ctx->getColorPalette()->get(COLOR_PRIMARY),
+      ctx->getColorPalette()->get(COLOR_BACKGROUND));
+    if (ctx->getColorDepth() != 1) {
+      tmpSprite->fillSprite(ctx->getColorPalette()->get(COLOR_BACKGROUND));
+    } else {
+      tmpSprite->fillSprite(0);
+    }
+    sprite->pushSprite(tmpSprite, boundingRect->getLeft() + offset_x,
+                       boundingRect->getTop() + offset_y);
+    rect = batteryPos;
+    rect.setPosition(rect.getTop(), rect.getLeft() + offset_x);
+    battery.draw(tmpSprite, rect, ctx);
+    rect = *subWindowPos;
+    rect.setPosition(rect.getTop(), rect.getLeft() + offset_x);
+    subWindow->draw(tmpSprite, rect, ctx);
+    tmpSprite->pushSprite(&M5.Display, 0, 0);
   } else {
     sprite->pushSprite(&M5.Display, boundingRect->getLeft(), boundingRect->getTop());
   }

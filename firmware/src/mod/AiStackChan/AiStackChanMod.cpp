@@ -140,10 +140,14 @@ AiStackChanMod::AiStackChanMod(bool _isOffline)
 }
 
 
+// RealtimeAiMod.cpp — AI 대화 모드일 때만 쓰담/시선/먼저말걸기 허용
+extern volatile bool g_inAiMod;
+
 void AiStackChanMod::init(void)
 {
   avatar.setSpeechText("터치하면 말해줘");
   Serial.println("[mod] AiStackChan init — tap screen to talk");
+  g_inAiMod = true;
 #if defined(ENABLE_CAMERA)
   if(isSubWindowON){
     avatar.set_isSubWindowEnable(true);
@@ -153,6 +157,7 @@ void AiStackChanMod::init(void)
 
 void AiStackChanMod::pause(void)
 {
+  g_inAiMod = false;
 #if defined(ENABLE_CAMERA)
   if(isSubWindowON){
     avatar.set_isSubWindowEnable(false);

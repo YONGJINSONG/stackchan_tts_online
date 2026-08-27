@@ -49,8 +49,8 @@ SubWindow::SubWindow() :
     M5_LOGE("spriteTxt new error");
   }
 
-  //JPEG表示用のバッファ
-  JPG_BUF_SIZE = 131072;   //128KB
+  //JPEG表示用のバッファ (VGA camera JPEG ~80–180KB; PhotoFrame skip threshold 200KB)
+  JPG_BUF_SIZE = 200 * 1024;
   //jpgBuf = new uint8_t[JPG_BUF_SIZE];
   jpgBuf = nullptr;
   // SPIRAMから確保するために、ここではnullptrにしておき初回のjpgBuf使用時に確保する。
@@ -98,7 +98,8 @@ void SubWindow::draw(M5Canvas *spi, BoundingRect rect, DrawContext *ctx) {
     else if(drawType == SUB_DRAW_TYPE_JPG){
       int x = rect.getLeft();
       int y = rect.getTop();
-      spi->drawJpg(jpgBuf, jpgSize, x, y);
+      // Fit VGA/large camera JPEG onto CoreS3 320x240 (PhotoFrame assets are already QVGA).
+      spi->drawJpg(jpgBuf, jpgSize, x, y, 320, 240);
 
 #if 0   //SDカードのファイルを直接指定もできるが、描画の度にSDカードから読み込むことになるため非効率
       if (SD.begin(GPIO_NUM_4, SPI, 25000000)) {

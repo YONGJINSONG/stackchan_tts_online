@@ -6,8 +6,9 @@ servo:
     # CoreS3 PortA X:1,Y:2 PortB X:8,Y:9 PortC X:18,Y:17
     # Stack-chanPCB Core1 X:5,Y:2 Core2 X:19,Y27
     # When using SCS0009, x:RX, y:TX (not used).(StackchanRT Version:Core1 x16,y17, Core2: x13,y14)
-    x: 33
-    y: 32
+    # CoreS3 Stack-chan: Port A (change to 18/17 if servos are on Port C)
+    x: 1
+    y: 2
   center:
     x: 90
     y: 90

@@ -262,7 +262,8 @@ void LayeredFace::draw(DrawContext* ctx) {
   const char* speech = ctx->getspeechText();
   bool hasSpeech = speech && speech[0];
 
-  if (!hasSpeech && ctx->getScale() == 1.0f && ctx->getRotation() == 0) {
+  const bool needSub = subWindow && subWindow->isEnabled();
+  if (!hasSpeech && ctx->getScale() == 1.0f && ctx->getRotation() == 0 && !needSub) {
     _composite->pushSprite(&M5.Display, boundingRect->getLeft(), boundingRect->getTop());
     return;
   }
@@ -278,18 +279,23 @@ void LayeredFace::draw(DrawContext* ctx) {
 
   float scale = ctx->getScale();
   float rotation = ctx->getRotation();
-  if (scale != 1.0f || rotation != 0) {
+  if (scale != 1.0f || rotation != 0 || needSub) {
     if (tmpSprite->width() != M5.Display.width()) {
       tmpSprite->deleteSprite();
       tmpSprite->setColorDepth(16);
       tmpSprite->createSprite(M5.Display.width(), M5.Display.height());
     }
     tmpSprite->fillSprite(ctx->getColorPalette()->get(COLOR_BACKGROUND));
-    sprite->pushRotateZoom(tmpSprite,
-                           M5.Display.width() / 2 + offset_x,
-                           M5.Display.height() / 2 + offset_y,
-                           rotation, scale, scale);
-    if (subWindow && subWindowPos) {
+    if (scale != 1.0f || rotation != 0) {
+      sprite->pushRotateZoom(tmpSprite,
+                             M5.Display.width() / 2 + offset_x,
+                             M5.Display.height() / 2 + offset_y,
+                             rotation, scale, scale);
+    } else {
+      sprite->pushSprite(tmpSprite, boundingRect->getLeft() + offset_x,
+                         boundingRect->getTop() + offset_y);
+    }
+    if (needSub && subWindowPos) {
       BoundingRect rect = *subWindowPos;
       rect.setPosition(rect.getTop(), rect.getLeft() + offset_x);
       subWindow->draw(tmpSprite, rect, ctx);
