@@ -12,6 +12,8 @@
 #define MATH_IDX_PATH   "/kids_tutor/db/math.idx"
 #define MATH6_DB_PATH   "/kids_tutor/db/math_6yo.ndjson"
 #define MATH6_IDX_PATH  "/kids_tutor/db/math_6yo.idx"
+#define SPATIAL_DB_PATH "/kids_tutor/db/spatial.ndjson"
+#define SPATIAL_IDX_PATH "/kids_tutor/db/spatial.idx"
 #define CURRICULUM_DB_PATH "/kids_tutor/db/curriculum.ndjson"
 #define CURRICULUM_IDX_PATH "/kids_tutor/db/curriculum.idx"
 #define STUDENT_CONFIG_PATH "/kids_tutor/config/student.json"
