@@ -944,10 +944,12 @@ static String& nexusive_key() {
   static bool loaded = false;
   if (loaded) return key;
   loaded = true;
+  sd_bus_lock();
   File f = SD.open("/yaml/SC_SecConfig.yaml", "r");
-  if (!f) return key;
+  if (!f) { sd_bus_unlock(); return key; }
   String body = f.readString();
   f.close();
+  sd_bus_unlock();
   DynamicJsonDocument doc(8192);
   if (deserializeYml(doc, body.c_str())) return key;
   const char* k = doc["apikey"]["nexusive"] | "";
@@ -1185,15 +1187,37 @@ static String filter_meals_by_when(const char* when) {
 // FreeRTOS task: refresh all 5 caches every 5 minutes. Pinned to APP_CPU so it
 // doesn't fight the WiFi/audio tasks on PRO_CPU.
 static void data_refresh_loop(void* arg) {
-  // Initial delay so WiFi connect + NTP sync are complete before the first fetch.
-  vTaskDelay(pdMS_TO_TICKS(12000));
+  // Wait for WiFi + Realtime WS to settle. Early HTTPS on CoreS3 competes with
+  // the WebSocket TLS buffer (internal RAM) → SSL alloc fail → WS drop.
+  vTaskDelay(pdMS_TO_TICKS(45000));
   for (;;) {
+#if defined(REALTIME_API)
+    while (g_ws_connected) {
+      vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+#endif
     Serial.println("[fn] data refresh: starting");
     String s;
     s = do_fetch_weather();    if (s.length() > 0) g_cache_weather = s;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+#if defined(REALTIME_API)
+    if (g_ws_connected) { Serial.println("[fn] data refresh paused (WS up)"); continue; }
+#endif
     s = do_fetch_air();        if (s.length() > 0) g_cache_air = s;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+#if defined(REALTIME_API)
+    if (g_ws_connected) { Serial.println("[fn] data refresh paused (WS up)"); continue; }
+#endif
     s = do_fetch_meals_week(); if (s.length() > 0) g_cache_meals_week = s;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+#if defined(REALTIME_API)
+    if (g_ws_connected) { Serial.println("[fn] data refresh paused (WS up)"); continue; }
+#endif
     s = do_fetch_todos();      if (s.length() > 0) g_cache_todos = s;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+#if defined(REALTIME_API)
+    if (g_ws_connected) { Serial.println("[fn] data refresh paused (WS up)"); continue; }
+#endif
     s = do_fetch_schedules();  if (s.length() > 0) g_cache_schedules = s;
     Serial.printf("[fn] data refresh done: w=%u air=%u meals=%u todos=%u sched=%u\n",
                   (unsigned)g_cache_weather.length(),
@@ -1207,6 +1231,15 @@ static void data_refresh_loop(void* arg) {
 
 void start_external_data_prefetch() {
   if (g_refresh_task_started) return;
+#if defined(REALTIME_API)
+  // CoreS3 internal RAM cannot host Realtime WebSocket TLS + concurrent
+  // HTTPS clients. Prefetch was causing SSL alloc failures and WS drops
+  // (even after deferring until disconnect). Skip the task on realtime builds;
+  // tool handlers keep returning cache/"not ready" until cascade or a later
+  // on-demand design.
+  Serial.println("[fn] data_refresh disabled (REALTIME_API — protects WS TLS)");
+  return;
+#endif
   g_refresh_task_started = true;
   xTaskCreatePinnedToCore(data_refresh_loop, "data_refresh",
                           16384, nullptr, 1, nullptr, APP_CPU_NUM);
@@ -1239,10 +1272,12 @@ static String& search_api_key() {
   static bool loaded = false;
   if (loaded) return key;
   loaded = true;
+  sd_bus_lock();
   File f = SD.open("/yaml/SC_SecConfig.yaml", "r");
-  if (!f) return key;
+  if (!f) { sd_bus_unlock(); return key; }
   String body = f.readString();
   f.close();
+  sd_bus_unlock();
   DynamicJsonDocument doc(8192);
   if (deserializeYml(doc, body.c_str())) return key;
   const char* k = doc["apikey"]["search"] | "";

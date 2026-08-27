@@ -11,6 +11,11 @@
 #include "IdleTalk.h"
 #include "CameraVision.h"
 #include "Sfx.h"          // 깜짝 효과음 이벤트
+#include "Robot.h"
+#if defined(REALTIME_API)
+#include "llm/RealtimeLLMBase.h"
+#include "DiagLog.h"   // g_ws_connected
+#endif
 
 using namespace m5avatar;
 
@@ -196,15 +201,33 @@ void proximity_tick() {
     setEyeRadiusScale(curScale);
 
     // Surprise reaction on rising edge into "very near".
+    // Skip while Realtime is listening/speaking — approach greet + gesture
+    // during mic-up was correlating with WebSocket drops.
+    bool busy = false;
+#if defined(REALTIME_API)
+    if (robot && robot->llm) {
+      RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
+      busy = rt->isRealtimeRecording() || rt->isSpeaking();
+    }
+#endif
     bool veryNear = ps >= c.veryNearThreshold;
-    if (veryNear && !wasVeryNear && (now - lastSurpriseMs > 4000)) {
+    if (!busy && veryNear && !wasVeryNear && (now - lastSurpriseMs > 4000)) {
         lastSurpriseMs = now;
         avatar.setExpression(Expression::Doubt);
         gesture_play(Expression::Doubt);
         idle_motion_hold(2500);     // let the surprise show without idle overriding
-        idle_talk_on_approach();    // greet if it's been quiet for a while (online only)
-        sfx_play_event("surprise"); // 깜짝 효과음(매핑 시)
-        Serial.printf("[prox] surprise! ps=%d\n", ps);
+#if defined(REALTIME_API)
+        // Proactive greet / SFX during a live Realtime session races the WS
+        // (pushUserText + mic handoff) and often precedes Disconnected.
+        if (g_ws_connected) {
+          Serial.printf("[prox] surprise visual-only (WS up) ps=%d\n", ps);
+        } else
+#endif
+        {
+          idle_talk_on_approach();
+          sfx_play_event("surprise");
+          Serial.printf("[prox] surprise! ps=%d\n", ps);
+        }
     }
     wasVeryNear = veryNear;
 }

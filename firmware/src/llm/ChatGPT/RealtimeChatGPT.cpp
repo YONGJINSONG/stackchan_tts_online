@@ -181,9 +181,12 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
                 String sessionUpdateStr;
                 serializeJson(sessionUpdateDoc, sessionUpdateStr);
-                String jsonPretty;
-                serializeJsonPretty(sessionUpdateDoc, jsonPretty);
-                Serial.printf("[WSc] session update json: %s\n", jsonPretty.c_str());
+                // Do NOT pretty-print the full tools JSON to Serial — USB-CDC blocks
+                // the WebSocket task for seconds and the UI looks frozen (same class of
+                // bug as per-chunk audio.delta logging).
+                int nTools = sessionUpdateDoc["session"]["tools"].size();
+                Serial.printf("[WSc] session.update sent (%u bytes, tools=%d)\n",
+                              (unsigned)sessionUpdateStr.length(), nTools);
                 p_this->webSocket.sendTXT(sessionUpdateStr.c_str());
             }
 			break;
@@ -202,7 +205,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             //Serial.printf("[WSc] text type: %s\n", msgType.c_str());
 
             if(msgType.equals("session.updated")){
-                Serial.printf("[WSc] payload: %s\n", payload);
+                Serial.println("[WSc] session.updated — ready (tap to talk)");
                 avatar.setSpeechText("터치해서 시작");
             }
             else if(msgType.equals("input_audio_buffer.speech_started")){
@@ -228,6 +231,14 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 //Serial.printf("[WSc] delta: %s\n", delta.c_str());
             }
             else if(msgType.equals("response.output_audio.delta")){
+                // Follow-up speech after a function_call has no input_audio_buffer.committed,
+                // and kids_tutor may clear a stuck speaking flag — re-arm mic→speaker handoff.
+                if (!p_this->speaking) {
+                    enterMutexAudio();
+                    M5.Mic.end();
+                    M5.Speaker.begin();
+                    p_this->speaking = true;
+                }
                 delta = p_this->msgDoc["delta"].as<String>();
                 p_this->streamAudioDelta(delta);
             }
@@ -247,14 +258,13 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 #endif
             else if(msgType.equals("response.done")){
                 last_commit_time = 0;
-                Serial.printf("[WSc] response.done payload: %s\n", payload);
-                Serial.printf("[heap] DMA=%u SPIRAM_free=%u SPIRAM_largest=%u INTERNAL_free=%u\n",
+                // Avoid dumping the full JSON — USB-CDC floods stall the UI loop.
+                int outputNum = p_this->msgDoc["response"]["output"].size();
+                Serial.printf("[WSc] response.done outputs=%d DMA=%u SPIRAM=%u INT=%u\n",
+                    outputNum,
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-                int outputNum = p_this->msgDoc["response"]["output"].size();
-                Serial.printf("output num: %d\n", outputNum);
                 bool isFuncCall = false;
                 for(int i = 0; i < outputNum; i++){
                     String outputType = p_this->msgDoc["response"]["output"][i]["type"].as<String>();
@@ -280,7 +290,12 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     }
                 }
 
-                if(!isFuncCall){
+                if(isFuncCall){
+                    // function_call response.done skips speaking=false. Keep speaking
+                    // true so follow-up audio can play; kids_tutor_process_pending waits
+                    // for Speaker / grace timeout if the follow-up never arrives.
+                    Serial.println("[WSc] function_call done (speaking held for follow-up)");
+                } else {
 #ifndef REALTIME_API_WITH_TTS
                     while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
                     M5.Speaker.end();

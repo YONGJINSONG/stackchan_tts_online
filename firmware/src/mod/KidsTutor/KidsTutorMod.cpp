@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SD.h>
+#include <M5Unified.h>
 #include <Avatar.h>
 #include "KidsTutorMod.h"
 #include "mod/ModManager.h"
@@ -36,6 +37,11 @@ bool g_math6Loaded = false;
 portMUX_TYPE g_voiceStartMux = portMUX_INITIALIZER_UNLOCKED;
 bool g_voiceStartPending = false;
 TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
+uint32_t g_voiceStartQueuedAt = 0;
+// After play_sd_content, Realtime leaves speaking=true (input committed) until a
+// follow-up response.done. If that never clears / never plays audio, pending
+// study would soft-hang forever without this grace/timeout.
+constexpr uint32_t kKidsFollowupGraceMs = 4000;
 }
 
 KidsTutorMod::KidsTutorMod() {
@@ -47,19 +53,24 @@ bool KidsTutorMod::ensureReady(String& errOut) {
   if (_engineReady) return true;
 
   Serial.println("[kids] init: checking SD content");
+  Serial.flush();
   sd_bus_lock();
   bool hasRoot = SD.exists("/kids_tutor") || SD.exists("/kids_tutor/db");
+  Serial.printf("[kids] init: SD root=%d\n", (int)hasRoot);
   if (!hasRoot) {
     sd_bus_unlock();
     errOut = "SD에 /kids_tutor 폴더가 없어요. 공부 프로그램을 카드에 복사해 주세요.";
     return false;
   }
 
+  Serial.println("[kids] init: opening DBs");
   bool okEng = g_englishDb.begin(SD, ENGLISH_DB_PATH, ENGLISH_IDX_PATH);
   bool okMath = g_mathDb.begin(SD, MATH_DB_PATH, MATH_IDX_PATH);
   bool okCur = g_curriculumDb.begin(SD, CURRICULUM_DB_PATH, CURRICULUM_IDX_PATH);
   g_math6Loaded = g_math6Db.begin(SD, MATH6_DB_PATH, MATH6_IDX_PATH);
   sd_bus_unlock();
+  Serial.printf("[kids] init: db eng=%d math=%d cur=%d math6=%d\n",
+                (int)okEng, (int)okMath, (int)okCur, (int)g_math6Loaded);
 
   if (!okEng || !okMath || !okCur) {
     errOut = "공부 DB를 열지 못했어요. /kids_tutor/db 를 확인해 주세요.";
@@ -70,6 +81,7 @@ bool KidsTutorMod::ensureReady(String& errOut) {
   g_ui.begin();
   Serial.println("[kids] init: voice settings");
   g_ui.beginVoice(SD);
+  Serial.println("[kids] init: learning manager");
   sd_bus_lock();
   bool learningReady = g_learning.begin(SD, g_englishDb, g_mathDb, g_curriculumDb);
   sd_bus_unlock();
@@ -101,7 +113,13 @@ void KidsTutorMod::beginSession(TutorEngine::Subject subject) {
     g_ui.showMessage("ERROR", err);
     return;
   }
+  // Realtime may leave Speaker owning I2S after a stuck speaking flag — free it
+  // before KidsTutor local WAV playback.
+  while (M5.Speaker.isPlaying()) delay(2);
+  M5.Speaker.end();
+  M5.Mic.begin();
   pauseUsageTimer();
+  Serial.printf("[kids] beginSession subject=%d\n", (int)subject);
   _session = g_tutor.start(subject);
   if (!_session) {
     g_ui.showMessage("NO QUESTION", "문제를 불러오지 못했어요.");
@@ -238,6 +256,7 @@ String kids_tutor_start_by_name(const char* name) {
   // that same task in the middle of its WebSocket callback.
   portENTER_CRITICAL(&g_voiceStartMux);
   g_voiceStartSubject = sub;
+  g_voiceStartQueuedAt = millis();
   g_voiceStartPending = true;
   portEXIT_CRITICAL(&g_voiceStartMux);
   Serial.println("[kids] voice start queued");
@@ -252,13 +271,37 @@ String kids_tutor_start_by_name(const char* name) {
 void kids_tutor_process_pending() {
   if (g_kidsTutorMod == nullptr) return;
 
+  bool pending = false;
+  uint32_t queuedAt = 0;
+  TutorEngine::Subject subject = TutorEngine::Subject::Daily;
+  portENTER_CRITICAL(&g_voiceStartMux);
+  pending = g_voiceStartPending;
+  queuedAt = g_voiceStartQueuedAt;
+  subject = g_voiceStartSubject;
+  portEXIT_CRITICAL(&g_voiceStartMux);
+  if (!pending) return;
+
 #if defined(REALTIME_API)
-  // Let the function-output follow-up response finish before pausing the
-  // Realtime mode. This also leaves the shared I2S audio state clean.
-  if (robot && robot->llm && ((RealtimeLLMBase*)robot->llm)->isSpeaking()) return;
+  // Let the function-output follow-up response finish before pausing Realtime.
+  // Bug: function_call response.done skips speaking=false, so a tool-only turn
+  // can leave speaking stuck true with no audio → soft-hang without a grace.
+  if (robot && robot->llm) {
+    RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
+    if (rt->isSpeaking()) {
+      if (M5.Speaker.isPlaying()) return;
+      uint32_t waited = millis() - queuedAt;
+      if (waited < kKidsFollowupGraceMs) return;
+      Serial.printf("[kids] speaking stuck %ums (no audio) — forcing study open\n",
+                    (unsigned)waited);
+      rt->setSpeaking(false);
+#ifndef REALTIME_API_WITH_TTS
+      M5.Speaker.end();
+      M5.Mic.begin();
+#endif
+    }
+  }
 #endif
 
-  TutorEngine::Subject subject;
   portENTER_CRITICAL(&g_voiceStartMux);
   if (!g_voiceStartPending) {
     portEXIT_CRITICAL(&g_voiceStartMux);

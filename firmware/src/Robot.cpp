@@ -50,9 +50,23 @@ Robot::Robot(StackchanExConfig& config) : m_config(config)
   //
 #ifdef USE_SERVO
   servo = new ServoCustom();
-  servo->begin(config.getServoInfo(AXIS_X)->pin, config.getServoInfo(AXIS_X)->start_degree,
+  int pinX = config.getServoInfo(AXIS_X)->pin;
+  int pinY = config.getServoInfo(AXIS_Y)->pin;
+#if defined(ARDUINO_M5STACK_CORES3)
+  // Core2 Port A pins (32/33) are not PWM-capable on CoreS3. SD yaml often still
+  // has them; remap to Port A defaults (1/2) so heads actually move.
+  if (pinX == 32 || pinX == 33 || pinX < 1 || pinX > 48) {
+    Serial.printf("[servo] pin X=%d invalid on CoreS3 — using %d\n", pinX, DEFAULT_SERVO_PIN_X);
+    pinX = DEFAULT_SERVO_PIN_X;
+  }
+  if (pinY == 32 || pinY == 33 || pinY < 1 || pinY > 48) {
+    Serial.printf("[servo] pin Y=%d invalid on CoreS3 — using %d\n", pinY, DEFAULT_SERVO_PIN_Y);
+    pinY = DEFAULT_SERVO_PIN_Y;
+  }
+#endif
+  servo->begin(pinX, config.getServoInfo(AXIS_X)->start_degree,
               config.getServoInfo(AXIS_X)->offset,
-              config.getServoInfo(AXIS_Y)->pin, config.getServoInfo(AXIS_Y)->start_degree,
+              pinY, config.getServoInfo(AXIS_Y)->start_degree,
               config.getServoInfo(AXIS_Y)->offset,
               (ServoType)config.getServoType());
 #endif

@@ -167,9 +167,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
                 String sessionUpdateStr;
                 serializeJson(sessionUpdateDoc, sessionUpdateStr);
-                String jsonPretty;
-                serializeJsonPretty(sessionUpdateDoc, jsonPretty);
-                Serial.printf("[WSc] session update json: %s\n", jsonPretty.c_str());
+                Serial.printf("[WSc] session.update sent (%u bytes)\n",
+                              (unsigned)sessionUpdateStr.length());
                 p_this->webSocket.sendTXT(sessionUpdateStr.c_str());
             }
 			break;
