@@ -80,7 +80,7 @@ void RealtimeAiMod::pause(void)
   // A direct mode change can arrive immediately after the function-call
   // response.  Release the microphone / final audio buffer before suspending
   // the WS task so the next mode never inherits an active I2S operation.
-  if (pRtLLM->isRealtimeRecording()) {
+  if (pRtLLM->isRealtimeRecordRequested()) {
     pRtLLM->stopRealtimeRecord();
   }
   uint32_t audioDrainStart = millis();
@@ -142,9 +142,11 @@ void RealtimeAiMod::btnC_pressed(void)
 
 void RealtimeAiMod::display_touched(int16_t x, int16_t y)
 {
-  Serial.printf("[touch] RealtimeAi x=%d y=%d listen=%d recording=%d\n",
+  Serial.printf("[touch] RealtimeAi x=%d y=%d listen=%d recording=%d requested=%d ready=%d\n",
                 (int)x, (int)y, (int)box_stt.contain(x, y),
-                (int)pRtLLM->isRealtimeRecording());
+                (int)pRtLLM->isRealtimeRecording(),
+                (int)pRtLLM->isRealtimeRecordRequested(),
+                (int)pRtLLM->isRealtimeSessionReady());
   // Only an explicit "sleep now" command blocks conversation. Scheduled night
   // remains dim/sleepy but must still accept tap-to-talk.
   if (night_mode_is_forced_sleep())
@@ -156,7 +158,10 @@ void RealtimeAiMod::display_touched(int16_t x, int16_t y)
   {
     sw_tone();
     toggleRealtimeRecord();
-    Serial.printf("[realtime] recording=%d\n", (int)pRtLLM->isRealtimeRecording());
+    Serial.printf("[realtime] recording=%d requested=%d ready=%d\n",
+                  (int)pRtLLM->isRealtimeRecording(),
+                  (int)pRtLLM->isRealtimeRecordRequested(),
+                  (int)pRtLLM->isRealtimeSessionReady());
     // box_stt intentionally covers the complete screen. Do not also invoke
     // the legacy servo/QR hit boxes that overlap this conversation surface.
     return;
@@ -232,6 +237,8 @@ void RealtimeAiMod::idle(void)
       // keep speech bubble free for captions / sleep face
     } else if (pRtLLM->isRealtimeRecording()) {
       avatar.setSpeechText("듣는 중...");
+    } else if (pRtLLM->isRealtimeRecordRequested()) {
+      avatar.setSpeechText("연결 중...");
     } else {
       avatar.setSpeechText("터치하면 시작");
     }
@@ -241,6 +248,7 @@ void RealtimeAiMod::idle(void)
       if (speaking)                            roboeyes_view_set_status("");
       else if (night_mode_is_forced_sleep())   roboeyes_view_set_status("");
       else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");
+      else if (pRtLLM->isRealtimeRecordRequested()) roboeyes_view_set_status("연결 중...");
       else                                     roboeyes_view_set_status("터치하면 시작");
     }
     roboeyes_view_set_talk(speaking ? (pRtLLM->getAudioLevel() / 12000.0f) : 0.0f);
@@ -275,7 +283,7 @@ void RealtimeAiMod::alarmEventHandler()
 
 bool RealtimeAiMod::isBusy(void)
 {
-  if(pRtLLM->isRealtimeRecording() || pRtLLM->isSpeaking()){
+  if(pRtLLM->isRealtimeRecordRequested() || pRtLLM->isSpeaking()){
     return true;
   }else{
     return false;
@@ -284,7 +292,13 @@ bool RealtimeAiMod::isBusy(void)
 
 void RealtimeAiMod::toggleRealtimeRecord(void)
 {
-  if(pRtLLM->isRealtimeRecording()){
+  if(pRtLLM->isRealtimeRecordRequested()){
+    if(!pRtLLM->isRealtimeSessionReady()){
+      // A tap while reconnecting means the user is still waiting to talk; do
+      // not turn that pending request into a cancellation.
+      Serial.println("[realtime] listen already queued - waiting for reconnect");
+      return;
+    }
     pRtLLM->stopRealtimeRecord();
   }else{
     pRtLLM->startRealtimeRecord();
@@ -300,7 +314,7 @@ void RealtimeAiMod::nightListenGuard(void)
 
   if (sleeping && !sleepHandled) {
     // 막 취침 진입: 녹음 중이었으면 멈추고 기억해둔다.
-    sleepWasRecording = pRtLLM->isRealtimeRecording();
+    sleepWasRecording = pRtLLM->isRealtimeRecordRequested();
     if (sleepWasRecording) {
       pRtLLM->stopRealtimeRecord();
       Serial.println("[night] sleep → stop listening (mic off)");
@@ -308,7 +322,7 @@ void RealtimeAiMod::nightListenGuard(void)
     sleepHandled = true;
   } else if (!sleeping && sleepHandled) {
     // 막 기상: 취침 전 녹음 중이었다면 다시 시작.
-    if (sleepWasRecording && !pRtLLM->isRealtimeRecording()) {
+    if (sleepWasRecording && !pRtLLM->isRealtimeRecordRequested()) {
       pRtLLM->startRealtimeRecord();
       Serial.println("[night] wake → resume listening (mic on)");
     }

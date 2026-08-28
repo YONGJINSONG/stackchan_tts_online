@@ -15,7 +15,9 @@
 
 #define GEMINI_PROMPT_MAX_SIZE   (1024*50)
 
-#define RT_REC_LENGTH       (2000)      //0.125s 
+#define RT_REC_LENGTH       (2000)      // 16 kHz PCM: 125 ms per chunk
+// CoreS3's known-working microphone capture rate. The Realtime session keeps
+// its existing 24 kHz contract for compatibility with the previous build.
 #define RT_REC_SAMPLE_RATE  (16000)
 
 #ifdef REALTIME_API_RECORD_TEST
@@ -39,6 +41,8 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     int rtRecSamplerate;
     int rtRecLength;
     bool realtime_recording;
+    volatile bool realtime_record_requested;
+    volatile bool realtime_session_ready;
     bool response_done;
     portTickType startTime;
 
@@ -79,9 +83,12 @@ public:
     int getAudioLevel();
     void startRealtimeRecord();
     void stopRealtimeRecord();
+    void setRealtimeSessionReady(bool ready);
     void resetRealtimeRecordStartTime();
     portTickType checkRealtimeRecordTimeout();
     bool isRealtimeRecording() {return realtime_recording;};
+    bool isRealtimeRecordRequested() {return realtime_record_requested;};
+    bool isRealtimeSessionReady() {return realtime_session_ready;};
 
     int base64_decode(const char* input, int size, char* output);
     void hexdump(const void *mem, uint32_t len, uint8_t cols = 16);

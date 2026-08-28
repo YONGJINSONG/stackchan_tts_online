@@ -23,12 +23,15 @@
 using namespace m5avatar;
 extern Avatar avatar;
 
+// Retain the model used by the last known-working device build.
+#define OPENAI_REALTIME_MODEL "gpt-realtime"
+
 static const char session_update[] =
       "{"
         "\"type\": \"session.update\","
         "\"session\": {"
           "\"type\": \"realtime\","
-          "\"model\": \"gpt-realtime\","
+          "\"model\": \"" OPENAI_REALTIME_MODEL "\","
 #ifdef REALTIME_API_WITH_TTS
           "\"output_modalities\": [\"text\"],"
 #else
@@ -107,6 +110,13 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 		case WStype_DISCONNECTED:
 			Serial.printf("[WSc] Disconnected!\n");
 			g_ws_connected = false;
+			p_this->setRealtimeSessionReady(false);
+			Serial.printf("[WSc] state wifi=%d rssi=%d heapI=%u largestI=%u heapS=%u\n",
+			              (int)WiFi.status(),
+			              WiFi.status() == WL_CONNECTED ? (int)WiFi.RSSI() : 0,
+			              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+			              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+			              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 			diag_log("WS disconnected (speaking=%d)", p_this->speaking ? 1 : 0);
 			// If we disconnect MID-OUTPUT (speaking==true) the mutexAudio + speaker
 			// were claimed by the committed/proactive handoff and would normally be
@@ -134,6 +144,13 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 		case WStype_CONNECTED:
 			Serial.printf("[WSc] Connected to url: %s\n", payload);
 			g_ws_connected = true;
+			p_this->setRealtimeSessionReady(false);
+			Serial.printf("[WSc] state wifi=%d rssi=%d heapI=%u largestI=%u heapS=%u\n",
+			              (int)WiFi.status(),
+			              WiFi.status() == WL_CONNECTED ? (int)WiFi.RSSI() : 0,
+			              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+			              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+			              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 			diag_log("WS connected");
 
             /*
@@ -194,7 +211,9 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 int nTools = sessionUpdateDoc["session"]["tools"].size();
                 Serial.printf("[WSc] session.update sent (%u bytes, tools=%d)\n",
                               (unsigned)sessionUpdateStr.length(), nTools);
-                p_this->webSocket.sendTXT(sessionUpdateStr.c_str());
+                if (!p_this->webSocket.sendTXT(sessionUpdateStr.c_str())) {
+                    Serial.println("[WSc] session.update send failed");
+                }
             }
 			break;
 		case WStype_TEXT:
@@ -213,7 +232,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
             if(msgType.equals("session.updated")){
                 Serial.println("[WSc] session.updated — ready (tap to talk)");
-                avatar.setSpeechText("터치해서 시작");
+                p_this->setRealtimeSessionReady(true);
+                avatar.setSpeechText(p_this->isRealtimeRecording() ? "듣는 중..." : "터치해서 시작");
             }
             else if(msgType.equals("input_audio_buffer.speech_started")){
                 p_this->resetRealtimeRecordStartTime();
@@ -380,6 +400,15 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 			p_this->hexdump(payload, length);
 			break;
 		case WStype_ERROR:
+			if (length >= 2) {
+				uint16_t closeCode = ((uint16_t)payload[0] << 8) | payload[1];
+				Serial.printf("[WSc] error/close len=%u code=%u reason=%.*s\n",
+				              (unsigned)length, (unsigned)closeCode,
+				              (int)(length - 2), (const char*)(payload + 2));
+			} else {
+				Serial.printf("[WSc] error/close len=%u\n", (unsigned)length);
+			}
+			break;
 		case WStype_FRAGMENT_TEXT_START:
 		case WStype_FRAGMENT_BIN_START:
 		case WStype_FRAGMENT:
@@ -426,7 +455,9 @@ RealtimeChatGPT::RealtimeChatGPT(llm_param_t param)
   // WebSocket connect
   //
   avatar.setSpeechText("연결 중...");
-  webSocket.beginSslWithCA("api.openai.com", 443, "/v1/realtime?model=gpt-realtime", root_ca_openai);
+  webSocket.beginSslWithCA("api.openai.com", 443,
+                           "/v1/realtime?model=" OPENAI_REALTIME_MODEL,
+                           root_ca_openai);
 
   // event handler
   p_this = this;    //コールバック関数に静的変数経由でthisポインタを渡す

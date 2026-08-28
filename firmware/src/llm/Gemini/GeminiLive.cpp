@@ -93,6 +93,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 	switch(type) {
 		case WStype_DISCONNECTED:
 			Serial.printf("[WSc] Disconnected!\n");
+			p_this->setRealtimeSessionReady(false);
 
       // Gemini Liveは応答の音声が長くなると途中でDisconnectすることがあるため、ストリーミング再生の終了処理を行う。
       // ※Disconnectの原因究明までの暫定処置
@@ -112,6 +113,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 			break;
 		case WStype_CONNECTED:
 			Serial.printf("[WSc] Connected to url: %s\n", payload);
+			p_this->setRealtimeSessionReady(false);
 
             /*
              * JSON "setup"でAPIの振る舞いをカスタマイズする
@@ -189,7 +191,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             if(!p_this->msgDoc["setupComplete"].isNull()){
                 Serial.printf("[WSc] setupComplete\n");
                 //Serial.printf("[WSc] payload: %s\n", payload);
-                avatar.setSpeechText("Please touch");
+                p_this->setRealtimeSessionReady(true);
+                avatar.setSpeechText(p_this->isRealtimeRecording() ? "듣는 중..." : "Please touch");
 
 #if 0   // for debug (音声の代わりにテキストのプロンプトを入力する)
                 String text_base64;

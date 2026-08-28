@@ -45,6 +45,8 @@ RealtimeLLMBase::RealtimeLLMBase(llm_param_t param) :
     rtRecSamplerate(RT_REC_SAMPLE_RATE),
     rtRecLength(RT_REC_LENGTH),
     realtime_recording(false),
+    realtime_record_requested(false),
+    realtime_session_ready(false),
     response_done(false),
     startTime(0),
     nextBufIdx(0),
@@ -102,7 +104,25 @@ void RealtimeLLMBase::webSocketProcess()
         }
 #else
         String audioJsonBuf("");
-        webSocket.sendTXT(buildInputAudioJson(audioJsonBuf, audio_base64));
+        String& audioJson = buildInputAudioJson(audioJsonBuf, audio_base64);
+        bool sent = webSocket.sendTXT(audioJson);
+        // Print one compact confirmation at the start of a turn (and then at
+        // most once every five seconds). This proves whether the disconnect is
+        // before or after the client hands an audio frame to the TLS socket.
+        static uint32_t lastAudioLogMs = 0;
+        if (!sent || (millis() - lastAudioLogMs >= 5000)) {
+            Serial.printf("[realtime] audio append sent=%d pcm=%u json=%u rate=%d\n",
+                          (int)sent,
+                          (unsigned)(rtRecLength * sizeof(int16_t)),
+                          (unsigned)audioJson.length(),
+                          rtRecSamplerate);
+            lastAudioLogMs = millis();
+        }
+        if (!sent) {
+            // Preserve the user's listening request so it resumes after the
+            // WebSocket library reconnects instead of silently dropping it.
+            setRealtimeSessionReady(false);
+        }
 #endif
 
         portTickType elapsedTime = checkRealtimeRecordTimeout();
@@ -123,6 +143,10 @@ void RealtimeLLMBase::webSocketProcess()
             resetRealtimeRecordStartTime(); //長いテキストを発話中にタイムアウトしてしまうのを防ぐ
             delay(1);
         }
+        else if(realtime_record_requested && !realtime_session_ready){
+            avatar.setSpeechText("연결 중...");
+            delay(10);
+        }
         else{
             avatar.setSpeechText("터치하면 시작");
             delay(10);
@@ -137,6 +161,12 @@ int RealtimeLLMBase::getAudioLevel()
 
 void RealtimeLLMBase::startRealtimeRecord()
 {
+    realtime_record_requested = true;
+    if(!realtime_session_ready){
+        Serial.println("[realtime] listen queued until session ready");
+        avatar.setSpeechText("연결 중...");
+        return;
+    }
     if(!realtime_recording){
         Serial.println("Start realtime recording");
         realtime_recording = true;
@@ -146,10 +176,34 @@ void RealtimeLLMBase::startRealtimeRecord()
 
 void RealtimeLLMBase::stopRealtimeRecord()
 {
+    realtime_record_requested = false;
     if(realtime_recording){
         Serial.println("Stop realtime recording");
         realtime_recording = false;
         startTime = 0;
+    }
+}
+
+void RealtimeLLMBase::setRealtimeSessionReady(bool ready)
+{
+    realtime_session_ready = ready;
+
+    if(!ready){
+        // Audio append frames cannot survive a disconnected socket. Stop the
+        // capture loop immediately, but remember the user's listening intent so
+        // a later session.updated/setupComplete can resume it automatically.
+        if(realtime_recording){
+            realtime_recording = false;
+            realtime_record_requested = true;
+            startTime = 0;
+            Serial.println("[realtime] session lost — recording paused, resume queued");
+        }
+        return;
+    }
+
+    if(realtime_record_requested && !realtime_recording && !speaking){
+        Serial.println("[realtime] session ready — starting queued listen");
+        startRealtimeRecord();
     }
 }
 

@@ -100,7 +100,7 @@ bool sfx_play_file(const char* file) {
   if (xSemaphoreTake(mutexAudio, pdMS_TO_TICKS(40)) != pdTRUE) { Serial.println("[sfx] audio busy — skip"); return false; }   // pump 가 재시도하므로 diag 스팸 방지
   bool wasRec = false;
 #if defined(REALTIME_API)
-  wasRec = rt->isRealtimeRecording();
+  wasRec = rt->isRealtimeRecordRequested();
   if (wasRec) rt->stopRealtimeRecord();
 #endif
   M5.Mic.end();
