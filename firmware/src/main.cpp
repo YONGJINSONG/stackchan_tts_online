@@ -281,8 +281,8 @@ ModBase* init_mod(void)
   add_mod(new StatusMonitorMod());
   // VolumeSettingMod 제거: 볼륨은 설정 페이지(/settings.html)에서 조정 — 모드 사이클에서 뺌.
   //add_mod(new VolumeSettingMod());
-  //add_mod(new EspNowRemoteMod());
-  //add_mod(new PomodoroMod(isOffline));
+  add_mod(new PomodoroMod(isOffline));
+  add_mod(new EspNowRemoteMod());
   add_mod(new PhotoFrameMod(isOffline));
   add_mod(new KidsTutorMod());
   add_mod(new RoboEyesMod(isOffline));   // RoboEyes 표정 모드 (1단계 검증)
@@ -893,6 +893,10 @@ void loop()
     else if (touchConsumed)
     {
       // A pet stroke owns its release; do not toggle recording or change mode.
+    }
+    else if (camera_action_is_ui_active())
+    {
+      if (t.wasReleased()) camera_action_on_touch(t.x, t.y);
     }
     else if (t.wasFlicked())
     {

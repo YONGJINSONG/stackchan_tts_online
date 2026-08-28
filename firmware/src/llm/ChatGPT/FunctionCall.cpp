@@ -259,11 +259,11 @@ const String json_Functions =
 #if defined(ENABLE_CAMERA)
   "{"
     "\"name\": \"take_photo\","
-    "\"description\": \"사진을 찍어달라고 할 때 호출한다. 저장, 사물 인식 등을 수행한다. 방식을 말하지 않으면 output을 save로 둔다.\","
+    "\"description\": \"사진을 찍어달라고 할 때 호출한다. 촬영 후 화면 버튼으로 저장 여부를 고른다. 저장할지를 말로 묻지 않는다. 방식을 말하지 않으면 output을 save로 둔다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
-        "\"output\":{ \"type\": \"string\", \"enum\": [\"save\", \"print\", \"display\", \"recognize_face\", \"recognize_object\"], \"description\": \"save: SD 저장, recognize_object: 사물 인식, print/display/recognize_face는 아직 미구현\" }"
+        "\"output\":{ \"type\": \"string\", \"enum\": [\"save\", \"display\", \"recognize_face\", \"recognize_object\"], \"description\": \"save: 촬영 후 화면에서 저장 여부 선택, recognize_object: 사물 인식\" }"
       "},"
       "\"required\": [\"output\"]"
     "}"
@@ -1450,7 +1450,7 @@ String FunctionCall::play_sd_content(const char* content_type, const char* name)
 }
 
 #if defined(ENABLE_CAMERA)
-// Capture itself is deferred to loop(); the result is returned after SD save/preview completes.
+// Capture is deferred to loop(); the on-screen save choice finishes the result.
 String FunctionCall::take_photo(const char* output) {
   String mode = output ? String(output) : String("save");
   if (mode == "save") {
@@ -1468,7 +1468,7 @@ String FunctionCall::take_photo(const char* output) {
     return String("{\"result\":\"") + desc + "\"}";
   }
   if (mode == "print") {
-    return "{\"error\":\"블루투스 프린터는 아직 연결되지 않았어요.\"}";
+    return "{\"error\":\"프린터 출력은 지원하지 않아요.\"}";
   }
   if (mode == "display") {
     return "{\"error\":\"e-paper 전송은 아직 준비 중이에요.\"}";

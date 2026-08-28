@@ -11,6 +11,7 @@
 #include "kids_tutor/LearningManager.h"
 #include "kids_tutor/TutorConfig.h"
 #include "Robot.h"
+#include "NightMode.h"
 #if defined(REALTIME_API)
 #include "llm/RealtimeLLMBase.h"
 #endif
@@ -139,6 +140,7 @@ void KidsTutorMod::queuePendingSubject(TutorEngine::Subject subject) {
 
 void KidsTutorMod::init(void) {
   // Own the LCD while this mod is active (RoboEyes / avatar face off).
+  night_mode_hold_day_brightness(true);
   g_avatar_render_pause = true;
   uint32_t pauseStart = millis();
   while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
@@ -168,6 +170,7 @@ void KidsTutorMod::pause(void) {
   }
   _hasPending = false;
   g_avatar_render_pause = false;
+  night_mode_hold_day_brightness(false);
   avatar.setSpeechText("");
 }
 
@@ -193,6 +196,12 @@ void KidsTutorMod::btnC_pressed(void) {
 }
 
 void KidsTutorMod::display_touched(int16_t x, int16_t y) {
+  if (g_ui.hitExitButton(x, y)) {
+    Serial.println("[kids] exit button -> chatbot");
+    change_mod_chatbot();
+    return;
+  }
+  if (y < 32) return;  // top bar / 나가기 영역은 과목·보기 버튼이 아님
   // CoreS3 has no physical A/B/C buttons. Match the three on-screen controls:
   // menu = Daily / English / Math, quiz = Previous / Submit / Next.
   const int width = M5.Display.width();

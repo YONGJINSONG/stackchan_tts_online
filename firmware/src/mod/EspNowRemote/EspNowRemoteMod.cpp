@@ -111,6 +111,7 @@ int mapClamped(int value, int in_min, int in_max, int out_min, int out_max)
 
 EspNowRemoteMod::EspNowRemoteMod(void)
 {
+  modName = "EspNowRemote";
 }
 
 void EspNowRemoteMod::init(void)

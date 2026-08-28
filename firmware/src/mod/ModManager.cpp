@@ -89,6 +89,15 @@ ModBase* change_mod_named(const char* name)
   return modList[0];
 }
 
+ModBase* change_mod_chatbot(void)
+{
+#if defined(REALTIME_API)
+  return change_mod_named("RealtimeAI");
+#else
+  return change_mod_named("AiStackChan");
+#endif
+}
+
 ModBase* get_current_mod(void)
 {
   return modList[0];

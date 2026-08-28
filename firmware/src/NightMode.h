@@ -23,5 +23,6 @@ void   night_mode_force_sleep(bool sleep);   // voice "잘자"→true(취침), "
 void   night_mode_set_display_power(bool on);
 bool   night_mode_display_is_off();
 bool   night_mode_wake_display();
+void   night_mode_hold_day_brightness(bool hold);  // KidsTutor: keep LCD at day brightness even at night
 
 #endif  // _NIGHT_MODE_H

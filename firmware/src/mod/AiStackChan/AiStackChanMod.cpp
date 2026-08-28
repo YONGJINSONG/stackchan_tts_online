@@ -104,6 +104,7 @@ static void STT_ChatGPT(const char *base64_buf = NULL) {
 AiStackChanMod::AiStackChanMod(bool _isOffline)
   : isOffline{_isOffline}
 {
+  modName = "AiStackChan";
   box_servo.setupBox(80, 120, 80, 80);
 #if defined(ENABLE_CAMERA)
   box_stt.setupBox(107, 0, M5.Display.width()-107, 80);

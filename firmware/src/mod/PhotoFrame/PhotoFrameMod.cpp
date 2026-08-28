@@ -114,12 +114,14 @@ void PhotoFrameMod::init(void)
 
   photoframe_config_load();
   g_photoIdx = 0;
+  photoList.clear();
   String dir = pf_base_dir();
   sd_bus_lock();                       // CoreS3: ディレクトリ走査中も描画を止めてSDを確実に読む
   SD.begin(GPIO_NUM_4, SPI, 25000000); // 他機能(メモ保存等)が SD.end() した後でも確実に再マウント
-  photoRoot = SD.open(dir.c_str());
-  createPhotoList(photoRoot);
-  if (photoRoot) photoRoot.close();
+  createPhotoList(dir);
+  if (g_folder.length() == 0) {
+    createPhotoList(String(APP_DATA_PATH) + "photos");
+  }
   sd_bus_unlock();
   updatePhoto();
 
@@ -209,16 +211,18 @@ String PhotoFrameMod::getNextPhoto(){
   return fname;
 }
 
-void PhotoFrameMod::createPhotoList(File dir) {
-  Serial.println("Creating photo list");
-  if (!dir) {   // SD folder /app/AiStackChanEx/photo missing → invalid File, don't iterate
-    Serial.println("[photo] /app/AiStackChanEx/photo not found on SD");
+void PhotoFrameMod::createPhotoList(const String& dirPath) {
+  Serial.printf("Creating photo list: %s\n", dirPath.c_str());
+  File dir = SD.open(dirPath.c_str());
+  if (!dir) {
+    Serial.printf("[photo] %s not found on SD\n", dirPath.c_str());
     return;
   }
   while(true) {
     File entry = dir.openNextFile();
     if (! entry) {
       Serial.println("no more files");
+      dir.close();
       return;
     }
 
@@ -226,10 +230,6 @@ void PhotoFrameMod::createPhotoList(File dir) {
     if (entry.isDirectory()) {
       Serial.println(" (this is a directory)");
     } else {
-      // Store the BASENAME only. ESP32 SD File::name() may return the full path
-      // ("/app/.../pri/img.jpg") depending on core version; appending that to
-      // pf_base_dir() again gives a broken path → "불러오기 실패". Strip to basename.
-      // Only JPEG (PNG/other crash the JPG decoder); skip macOS/hidden ._ files.
       String orig = String(entry.name());
       int sl = orig.lastIndexOf('/');
       String base = (sl >= 0) ? orig.substring(sl + 1) : orig;
@@ -237,8 +237,9 @@ void PhotoFrameMod::createPhotoList(File dir) {
       bool isJpg = low.endsWith(".jpg") || low.endsWith(".jpeg");
       bool isHidden = base.startsWith(".") || base.startsWith("_");
       if (isJpg && !isHidden) {
-        photoList.push_back(base);
-        Serial.printf(" (added: %s)\n", base.c_str());
+        String full = dirPath + "/" + base;
+        photoList.push_back(full);
+        Serial.printf(" (added: %s)\n", full.c_str());
       } else {
         Serial.println(" (skipped: not .jpg)");
       }
@@ -249,11 +250,12 @@ void PhotoFrameMod::createPhotoList(File dir) {
 void PhotoFrameMod::updatePhoto(){
   if (photoList.empty()) {   // nothing to show — show a notice instead of crashing
     avatar.set_isSubWindowEnable(false);
-    avatar.setSpeechText((String("사진 없음 (SD ") + pf_base_dir() + ")").c_str());
+    avatar.setSpeechText("사진이 없어요");
+    Serial.printf("[photo] empty (looked in %s)\n", pf_base_dir().c_str());
     return;
   }
   if (g_photoIdx >= photoList.size()) g_photoIdx = 0;
-  String fname = pf_base_dir() + "/" + photoList[g_photoIdx];   // index-based (prev/next navigation)
+  String fname = photoList[g_photoIdx];
   Serial.printf("Next photo : %s\n", fname.c_str());
 
   // CoreS3: SDとLCDがSPIバス(GPIO35=MISO/DC)を共有するため、SD読込中は
@@ -282,7 +284,7 @@ void PhotoFrameMod::updatePhoto(){
   if (notFound) {
     Serial.printf("[photo] NOT FOUND: %s\n", fname.c_str());
     avatar.set_isSubWindowEnable(false);
-    avatar.setSpeechText((String("파일없음:") + photoList[g_photoIdx]).c_str());
+    avatar.setSpeechText((String("파일없음:") + fname).c_str());
   } else if (oversized) {
     Serial.printf("[photo] skip oversized %s\n", fname.c_str());
     avatar.set_isSubWindowEnable(false);

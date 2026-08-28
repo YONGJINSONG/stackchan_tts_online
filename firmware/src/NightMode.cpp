@@ -34,6 +34,7 @@ static volatile bool g_forceActive = false;   // true = ignore clock, use g_forc
 static volatile bool g_forceSleep  = false;
 static volatile bool g_displayForcedOff = false;
 static volatile bool g_displayDirty = false;
+static volatile bool g_holdDayBrightness = false;
 
 static void lock()   { if (g_mux) xSemaphoreTake(g_mux, portMAX_DELAY); }
 static void unlock() { if (g_mux) xSemaphoreGive(g_mux); }
@@ -67,6 +68,23 @@ bool night_mode_wake_display() {
     night_mode_set_display_power(true);
     Serial.println("[display] first touch consumed to wake LCD");
     return true;
+}
+
+void night_mode_hold_day_brightness(bool hold) {
+    NightConfig c;
+    lock();
+    c = g_cfg;
+    unlock();
+    g_holdDayBrightness = hold;
+    if (hold) {
+        g_displayForcedOff = false;
+        g_displayDirty = true;
+        M5.Display.setBrightness(c.dayBrightness);
+        Serial.printf("[night] hold day brightness %d (KidsTutor)\n", c.dayBrightness);
+    } else {
+        g_displayDirty = true;
+        Serial.println("[night] release day-brightness hold");
+    }
 }
 
 static void clampConfig(NightConfig& c) {
@@ -174,6 +192,17 @@ void night_mode_tick() {
     static int  appliedBrightness = -1;
     static bool prevNight = false;
     static bool firstValidDone = false;   // have we seen at least one valid clock reading?
+
+    if (g_holdDayBrightness) {
+        if (!g_displayDirty && appliedBrightness >= 0) return;
+        NightConfig held;
+        lock(); held = g_cfg; unlock();
+        M5.Display.setBrightness(held.dayBrightness);
+        appliedBrightness = held.dayBrightness;
+        g_displayDirty = false;
+        Serial.printf("[night] hold keeps day brightness %d\n", held.dayBrightness);
+        return;
+    }
 
     if (g_displayForcedOff) {
         if (g_displayDirty || appliedBrightness != 0) {

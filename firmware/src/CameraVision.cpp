@@ -27,6 +27,13 @@ void camera_sensor_bus_lock() {
     }
     if (s_sensor_bus_mutex != nullptr) xSemaphoreTake(s_sensor_bus_mutex, portMAX_DELAY);
 }
+bool camera_sensor_bus_try_lock(uint32_t timeout_ms) {
+    if (s_sensor_bus_mutex == nullptr) {
+        s_sensor_bus_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_sensor_bus_mutex == nullptr) return false;
+    return xSemaphoreTake(s_sensor_bus_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
 void camera_sensor_bus_unlock() {
     if (s_sensor_bus_mutex != nullptr) xSemaphoreGive(s_sensor_bus_mutex);
 }

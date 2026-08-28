@@ -20,6 +20,7 @@ String camera_vision_describe(const String& hint);  // capture + describe; empty
 bool camera_is_busy();
 void camera_set_hardware_busy(bool busy);
 void camera_sensor_bus_lock();
+bool camera_sensor_bus_try_lock(uint32_t timeout_ms);
 void camera_sensor_bus_unlock();
 
 #endif  // _CAMERA_VISION_H

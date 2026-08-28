@@ -17,6 +17,7 @@
 #include "CameraAction.h"
 
 #include <base64.h>
+#include <esp_heap_caps.h>
 #include "libb64/cdecode.h"
 #include <WebSocketsClient.h>
 
@@ -44,7 +45,12 @@ static const char session_update[] =
                 "\"rate\": 24000"
               "},"
               "\"turn_detection\": {"
-                "\"type\": \"semantic_vad\""
+                "\"type\": \"server_vad\","
+                "\"threshold\": 0.5,"
+                "\"prefix_padding_ms\": 300,"
+                "\"silence_duration_ms\": 700,"
+                "\"create_response\": true,"
+                "\"interrupt_response\": false"
               "}"
             "},"
             "\"output\": {"
@@ -341,7 +347,25 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 }
 
                 if(deferredActionRequested && !modeSwitchRequested){
-                    last_commit_time = millis();
+                    // A deferred device action includes countdown and human UI.
+                    // Do not apply the model-response watchdog while waiting for it;
+                    // onWebSocketTick() re-arms the watchdog after sending the result.
+                    last_commit_time = 0;
+                    // Free I2S DMA before loop-task camera init. Skipping this
+                    // left Speaker/Mic buffers in internal RAM so ll_cam's
+                    // 15,360-byte DMA malloc failed (largest block ~4 KB).
+                    if (p_this->isRealtimeRecording()) p_this->stopRealtimeRecord();
+                    while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
+                    M5.Speaker.end();
+                    M5.Mic.end();
+#ifndef REALTIME_API_WITH_TTS
+                    if (p_this->speaking) {
+                        exitMutexAudio();
+                        p_this->speaking = false;
+                    }
+#endif
+                    Serial.printf("[WSc] deferred audio released DMA largest=%u\n",
+                                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
                     Serial.println("[WSc] waiting for deferred function result");
                 } else if(isFuncCall && !modeSwitchRequested){
                     // All function outputs must be present before requesting the

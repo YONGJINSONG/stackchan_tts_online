@@ -43,6 +43,7 @@ PomodoroMod::PomodoroMod(bool _isOffline)
   : isOffline{_isOffline},
     isSilentMode{true}
 {
+  modName = "Pomodoro";
   box_servo.setupBox(80, 120, 80, 80);
   box_stt.setupBox(0, 0, M5.Display.width(), 60);
   box_BtnA.setupBox(0, 100, 40, 60);

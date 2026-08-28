@@ -2,13 +2,21 @@
 
 namespace {
 constexpr int kTutorFooterHeight = 52;
+constexpr int kExitBtnW = 70;
+constexpr int kExitBtnH = 24;
+}
+
+void StackchanUI::prepareText() {
+  // Avatar balloons leave MC_DATUM on M5.Lcd. Tutor layout is top-left.
+  M5.Display.setTextDatum(textdatum_t::top_left);
+  M5.Display.setFont(&fonts::efontKR_16);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
 void StackchanUI::begin() {
   // Host firmware already called M5.begin(); only claim the display here.
-  M5.Display.setFont(&fonts::efontKR_16);
-  M5.Display.setTextSize(1);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  prepareText();
   M5.Display.fillScreen(TFT_BLACK);
 #if TUTOR_ENABLE_SERVO
   _servo.begin(TUTOR_SERVO_X_PIN, TUTOR_SERVO_X_HOME, TUTOR_SERVO_X_OFFSET,
@@ -36,6 +44,7 @@ bool StackchanUI::beginVoice(fs::FS& fs) {
 }
 
 void StackchanUI::drawFace(FaceMood mood) {
+  prepareText();
   M5.Display.fillScreen(TFT_BLACK);
   const int w = M5.Display.width();
   const int h = M5.Display.height();
@@ -94,13 +103,7 @@ void StackchanUI::drawTouchFooter(bool quiz) {
   const int third = w / 3;
   const char* labels[3] = { quiz ? "이전" : "매일", quiz ? "정답" : "영어", quiz ? "다음" : "수학" };
   M5.Display.fillRect(0, top, w, h - top, TFT_BLACK);
-  if (quiz) {
-    const String hint = "< > 좌우 밀기: 나가기";
-    int hintX = max(2, (w - M5.Display.textWidth(hint)) / 2);
-    M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    M5.Display.drawString(hint, hintX, top + 1);
-  }
-  const int buttonTop = quiz ? top + 20 : top + 3;
+  const int buttonTop = top + 3;
   const int buttonHeight = h - buttonTop - 3;
   for (int i = 0; i < 3; i++) {
     int left = i * third + 3;
@@ -112,38 +115,57 @@ void StackchanUI::drawTouchFooter(bool quiz) {
   }
 }
 
+void StackchanUI::drawExitButton() {
+  const int w = M5.Display.width();
+  const int left = w - kExitBtnW - 4;
+  M5.Display.fillRoundRect(left, 2, kExitBtnW, kExitBtnH, 4, TFT_DARKGREY);
+  M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREY);
+  const char* label = "나가기";
+  int labelX = left + max(2, (kExitBtnW - M5.Display.textWidth(label)) / 2);
+  M5.Display.drawString(label, labelX, 6);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+bool StackchanUI::hitExitButton(int16_t x, int16_t y) const {
+  const int w = M5.Display.width();
+  const int left = w - kExitBtnW - 4;
+  return x >= left && x < w - 2 && y >= 0 && y < (kExitBtnH + 6);
+}
+
 void StackchanUI::showBootMenu(const String& learner, uint8_t age, bool math6yo) {
+  prepareText();
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextSize(1);
   M5.Display.drawString("KIDS TUTOR", 10, 10);
   M5.Display.drawString(learner + "  " + String(age) + "세", 10, 36);
   M5.Display.drawString("화면 아래를 눌러 과목을 골라요", 10, 66);
   M5.Display.drawString(math6yo ? "수학: 6세 과정" : "수학: 자유 학습", 10, 94);
   M5.Display.drawString(localAudioReady() ? "소리: 로컬" : "소리: 기본", 10, 122);
-  M5.Display.drawString("문제: 이전 · 정답 · 다음", 10, 150);
+  M5.Display.drawString("오른쪽 위 나가기 → 대화", 10, 150);
   drawTouchFooter(false);
+  drawExitButton();
 }
 
 void StackchanUI::showStatusLine(const String& subject, uint8_t level, uint32_t stars,
                                  uint8_t questionNumber, uint8_t questionTotal,
                                  uint32_t remainingSeconds) {
-  M5.Display.fillRect(0, 0, M5.Display.width(), 24, TFT_BLACK);
-  M5.Display.setTextSize(1);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  prepareText();
+  M5.Display.fillRect(0, 0, M5.Display.width(), 28, TFT_BLACK);
   String status = subject + " " + String(questionNumber) + "/" + String(questionTotal)
                 + " L" + String(level) + " *" + String(stars);
   if (remainingSeconds != 0xffffffffUL) {
     status += " " + String(remainingSeconds / 60) + ":"
             + String((remainingSeconds % 60 + 100)).substring(1);
   }
-  drawWrapped(status, 8, 5, M5.Display.width() - 16, 16, 1);
-  M5.Display.drawFastHLine(0, 24, M5.Display.width(), TFT_DARKGREY);
+  drawWrapped(status, 8, 5, M5.Display.width() - kExitBtnW - 20, 16, 1);
+  M5.Display.drawFastHLine(0, 28, M5.Display.width() - kExitBtnW - 8, TFT_DARKGREY);
+  drawExitButton();
 }
 
 void StackchanUI::showQuestion(const Question& q, const std::vector<String>& choices, int selected,
                                const String& subject, uint8_t level, uint32_t stars,
                                uint8_t questionNumber, uint8_t questionTotal,
                                uint32_t remainingSeconds) {
+  prepareText();
   M5.Display.fillScreen(TFT_BLACK);
   showStatusLine(subject, level, stars, questionNumber, questionTotal, remainingSeconds);
 
@@ -157,7 +179,7 @@ void StackchanUI::showQuestion(const Question& q, const std::vector<String>& cho
 #endif
   const int width = M5.Display.width();
   const int footerTop = M5.Display.height() - kTutorFooterHeight;
-  const int questionTop = 30;
+  const int questionTop = 32;
   const int choiceY = max(questionTop + 48, footerTop - 96);
   const int questionHeight = choiceY - questionTop - 4;
   int textX = 8;
@@ -189,13 +211,15 @@ void StackchanUI::showQuestion(const Question& q, const std::vector<String>& cho
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   if (y < footerTop) M5.Display.fillRect(0, y, M5.Display.width(), footerTop - y, TFT_BLACK);
   drawTouchFooter(true);
+  drawExitButton();
 }
 
 void StackchanUI::showMessage(const String& title, const String& body) {
+  prepareText();
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextSize(1);
   M5.Display.drawString(title, 10, 20);
   drawWrapped(body, 10, 58, M5.Display.width() - 20, 18, 7);
+  drawExitButton();
 }
 
 void StackchanUI::showListening() {

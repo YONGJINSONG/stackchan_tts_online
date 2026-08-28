@@ -42,6 +42,7 @@ public:
   void nod();
   void thinkMove();
   void centerHead();
+  bool hitExitButton(int16_t x, int16_t y) const;
 
 private:
   fs::FS* _fs = nullptr;
@@ -50,6 +51,8 @@ private:
   StackchanSERVO _servo;
   bool _servoReady = false;
 #endif
+  void prepareText();
   void drawWrapped(const String& text, int x, int y, int maxWidth, int lineHeight, int maxLines);
   void drawTouchFooter(bool quiz);
+  void drawExitButton();
 };

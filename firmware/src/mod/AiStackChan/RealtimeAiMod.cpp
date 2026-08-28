@@ -37,8 +37,9 @@ extern void alarm_tone();
 
 
 RealtimeAiMod::RealtimeAiMod(bool _isOffline)
-  : isOffline{_isOffline}
+    : isOffline{_isOffline}
 {
+  modName = "RealtimeAI";
   box_servo.setupBox(80, 120, 80, 80);
   // Realtime conversation is the primary screen action: accept a tap anywhere
   // on the face, rather than reserving a thin, invisible strip at the top.
