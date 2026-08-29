@@ -523,7 +523,7 @@ bool LearningManager::writeReports(uint8_t endLevel, uint32_t stars) {
     File f = _fs->open(path, FILE_WRITE);
     if (!f) return;
     f.print("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
-    f.print("<title>지우 Stack-chan 학습 리포트</title><style>body{font-family:system-ui,sans-serif;max-width:760px;margin:32px auto;padding:0 18px;line-height:1.55} .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{border:1px solid #ddd;border-radius:14px;padding:16px} .big{font-size:28px;font-weight:700} table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}.muted{color:#666}@media(max-width:560px){.cards{grid-template-columns:1fr}}</style></head><body>");
+    f.print("<title>지우 로니 학습 리포트</title><style>body{font-family:system-ui,sans-serif;max-width:760px;margin:32px auto;padding:0 18px;line-height:1.55} .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{border:1px solid #ddd;border-radius:14px;padding:16px} .big{font-size:28px;font-weight:700} table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}.muted{color:#666}@media(max-width:560px){.cards{grid-template-columns:1fr}}</style></head><body>");
     f.printf("<h1>%s의 오늘 학습 리포트</h1><p class='muted'>%s · %u세 · %s</p>", _studentName.c_str(), key.c_str(), _studentAge, timestampText().c_str());
     f.print("<div class='cards'>");
     f.printf("<div class='card'><div>학습시간</div><div class='big'>%u분 %u초</div></div>", duration/60, duration%60);

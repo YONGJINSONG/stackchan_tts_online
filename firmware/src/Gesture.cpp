@@ -16,6 +16,7 @@ extern volatile uint32_t g_servoManualUntil;   // main.cpp — 웹 조이스틱 
 extern Avatar avatar;
 
 volatile uint32_t gesture_suppress_until = 0;
+volatile bool g_gesture_playing = false;
 static QueueHandle_t gestureQueue = NULL;
 
 enum class GestureCommandType : uint8_t {
@@ -65,11 +66,17 @@ static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms)
   gesture_suppress_until = millis() + total + tail_pad_ms + 2000;
   Serial.printf("[gesture] sequence n=%d total=%ums suppress=%ums\n", n, total, total + tail_pad_ms + 2000);
 
+  g_gesture_playing = true;
   for(int i = 0; i < n; i++){
+    if (camera_is_busy()) {
+      Serial.println("[gesture] abort remaining steps (camera taking hardware)");
+      break;
+    }
     Serial.printf("[gesture]   step %d: x=%d y=%d ms=%u\n", i, steps[i].degX, steps[i].degY, steps[i].ms);
     robot->servo->moveTo(steps[i].degX, steps[i].degY, steps[i].ms);
     delay(steps[i].ms);
   }
+  g_gesture_playing = false;
 }
 
 static void gesture_task(void* arg) {

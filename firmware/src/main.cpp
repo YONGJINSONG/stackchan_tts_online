@@ -281,7 +281,8 @@ ModBase* init_mod(void)
   add_mod(new StatusMonitorMod());
   // VolumeSettingMod 제거: 볼륨은 설정 페이지(/settings.html)에서 조정 — 모드 사이클에서 뺌.
   //add_mod(new VolumeSettingMod());
-  add_mod(new PomodoroMod(isOffline));
+  // Pomodoro 타이머는 사용하지 않음 — 모드 사이클에서 뺌.
+  //add_mod(new PomodoroMod(isOffline));
   add_mod(new EspNowRemoteMod());
   add_mod(new PhotoFrameMod(isOffline));
   add_mod(new KidsTutorMod());
@@ -596,7 +597,7 @@ void setup()
 #else
   M5.Lcd.setFont(&fonts::efontKR_16);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.println("AI Stack-chan Ex [^_^]");
+  M5.Lcd.println("로니 [^_^]");
   M5.Lcd.printf("Firmware Version: %s\n", FW_VERSION);
   M5.Lcd.println("한국어 폰트 활성화");  // KR font verification
 #endif

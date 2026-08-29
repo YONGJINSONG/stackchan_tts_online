@@ -38,6 +38,8 @@ bool g_math6Loaded = false;
 portMUX_TYPE g_voiceStartMux = portMUX_INITIALIZER_UNLOCKED;
 bool g_voiceStartPending = false;
 TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
+uint32_t g_voiceStartQueuedAt = 0;
+constexpr uint32_t kVoiceStartSpeakingWaitMs = 2000;
 }
 
 KidsTutorMod::KidsTutorMod() {
@@ -75,8 +77,13 @@ bool KidsTutorMod::ensureReady(String& errOut) {
 
   Serial.println("[kids] init: databases loaded");
   g_ui.begin();
+  while (M5.Speaker.isPlaying()) delay(2);
+  M5.Speaker.end();
+  if (M5.Mic.isEnabled()) M5.Mic.end();
   Serial.println("[kids] init: voice settings");
-  g_ui.beginVoice(SD);
+  if (!g_ui.beginVoice(SD)) {
+    Serial.println("[kids] voice lite unavailable; button menu still works");
+  }
   Serial.println("[kids] init: learning manager");
   sd_bus_lock();
   bool learningReady = g_learning.begin(SD, g_englishDb, g_mathDb, g_curriculumDb);
@@ -145,6 +152,9 @@ void KidsTutorMod::init(void) {
   uint32_t pauseStart = millis();
   while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
   Serial.println("[kids] init: avatar renderer paused");
+  while (M5.Speaker.isPlaying()) delay(2);
+  M5.Speaker.end();
+  if (M5.Mic.isEnabled()) M5.Mic.end();
 
   String err;
   if (!ensureReady(err)) {
@@ -261,6 +271,7 @@ String kids_tutor_start_by_name(const char* name) {
   portENTER_CRITICAL(&g_voiceStartMux);
   g_voiceStartSubject = sub;
   g_voiceStartPending = true;
+  g_voiceStartQueuedAt = millis();
   portEXIT_CRITICAL(&g_voiceStartMux);
   Serial.println("[kids] voice start queued");
 
@@ -276,9 +287,11 @@ void kids_tutor_process_pending() {
 
   bool pending = false;
   TutorEngine::Subject subject = TutorEngine::Subject::Daily;
+  uint32_t queuedAt = 0;
   portENTER_CRITICAL(&g_voiceStartMux);
   pending = g_voiceStartPending;
   subject = g_voiceStartSubject;
+  queuedAt = g_voiceStartQueuedAt;
   portEXIT_CRITICAL(&g_voiceStartMux);
   if (!pending) return;
 
@@ -286,9 +299,15 @@ void kids_tutor_process_pending() {
   // The WebSocket task that owns the audio mutex finishes the current response
   // and releases Speaker/Mic before clearing speaking. Never force that state
   // from this main-loop task: doing so can strand the non-recursive audio mutex.
+  // If speaking stays true (function-only turn), wait briefly then proceed.
   if (robot && robot->llm) {
     RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
-    if (rt->isSpeaking()) return;
+    if (rt->isSpeaking()) {
+      if ((uint32_t)(millis() - queuedAt) < kVoiceStartSpeakingWaitMs) {
+        return;
+      }
+      Serial.println("[kids] speaking wait timed out; opening study anyway");
+    }
   }
 #endif
 

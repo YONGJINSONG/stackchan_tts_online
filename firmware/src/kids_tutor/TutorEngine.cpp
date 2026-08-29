@@ -241,7 +241,8 @@ bool TutorEngine::finishSessionIfNeeded() {
   // Daily already has a prepared local completion WAV. Free-study sessions
   // have just played their final feedback, so avoid requesting a missing clip.
   if (_subject == Subject::Daily && _learning) _ui->speak(_learning->completionSpeech(), "ko");
-  delay(3000);
+  _ui->playStageWin();
+  delay(400);
   _sessionComplete = true;
   _voicePending = false;
   return true;

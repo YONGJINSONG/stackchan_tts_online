@@ -39,10 +39,10 @@ balloon:
   - "Hello"
   - "Bonjour"
   - "你好"
-  - "私はスタックチャン"
-  - "我是Stack-chan"
-  - "I'm Stack-chan"
-  - "Je suis Stack-chan"
+  - "나는 로니야"
+  - "我是罗尼"
+  - "I'm Roni"
+  - "Je suis Roni"
 led_lr: 0 # 0:stereo, 1:left_only, 2:right_only
 led_pin: 15 # GoBottom1:15 GoBottom2:25
 takao_base: false # Whether to use takaobase to feed power from the rear connector.(Stack-chan_Takao_Base  https://ssci.to/8905)

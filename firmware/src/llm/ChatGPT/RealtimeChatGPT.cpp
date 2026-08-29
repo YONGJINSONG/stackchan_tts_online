@@ -62,7 +62,7 @@ static const char session_update[] =
               "\"voice\": \"marin\""
             "}"
           "},"
-          "\"instructions\": \"You are a friendly robot named 스택짱. Respond only in Korean.\","
+          "\"instructions\": \"You are a friendly robot named 로니. Respond only in Korean.\","
           "\"max_output_tokens\": 2500,"
           "\"tools\":[]"
         "}"

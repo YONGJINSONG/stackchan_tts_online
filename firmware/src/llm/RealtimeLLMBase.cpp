@@ -513,6 +513,7 @@ void RealtimeLLMBase::invokeWebSocketLoopTask(void)
 
 void RealtimeLLMBase::suspendWebSocketLoopTask(void)
 {
+    if (webSocketLoopTask_h == NULL) return;
     if (eTaskGetState(webSocketLoopTask_h) != eSuspended) {
       Serial.println("webSocketLoopTask Suspend");
       vTaskSuspend(webSocketLoopTask_h);
@@ -521,6 +522,7 @@ void RealtimeLLMBase::suspendWebSocketLoopTask(void)
 
 void RealtimeLLMBase::resumeWebSocketLoopTask(void)
 {
+    if (webSocketLoopTask_h == NULL) return;
     if (eTaskGetState(webSocketLoopTask_h) == eSuspended) {
       Serial.println("webSocketLoopTask Resume");
       vTaskResume(webSocketLoopTask_h);

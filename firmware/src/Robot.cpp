@@ -53,17 +53,16 @@ Robot::Robot(StackchanExConfig& config) : m_config(config)
   int pinX = config.getServoInfo(AXIS_X)->pin;
   int pinY = config.getServoInfo(AXIS_Y)->pin;
 #if defined(ARDUINO_M5STACK_CORES3)
-  // Core2 Port A pins (32/33) are not PWM-capable on CoreS3. SD yaml often still
-  // has them; remap to Port A defaults (1/2) so heads actually move.
-  if (pinX == 32 || pinX == 33 || pinX < 1 || pinX > 48) {
-    Serial.printf("[servo] WARNING: SD pin X=%d is Core2/invalid — remapped to Port A GPIO %d\n",
-                  pinX, DEFAULT_SERVO_PIN_X);
-    Serial.println("[servo] If head never moves, try Port C in SC_BasicConfig.yaml: x:18 y:17");
+  bool remap = (pinX == 32 || pinX == 33 || pinY == 32 || pinY == 33
+                || pinX < 1 || pinX > 48 || pinY < 1 || pinY > 48);
+#if defined(ENABLE_CAMERA)
+  // Camera XCLK owns GPIO2. Yaml 1/2 (Port A) cannot drive the head.
+  if (pinY == 2 || (pinX == 1 && pinY == 2)) remap = true;
+#endif
+  if (remap) {
+    Serial.printf("[servo] WARNING: SD pins x=%d y=%d remapped to GPIO %d/%d\n",
+                  pinX, pinY, DEFAULT_SERVO_PIN_X, DEFAULT_SERVO_PIN_Y);
     pinX = DEFAULT_SERVO_PIN_X;
-  }
-  if (pinY == 32 || pinY == 33 || pinY < 1 || pinY > 48) {
-    Serial.printf("[servo] WARNING: SD pin Y=%d is Core2/invalid — remapped to Port A GPIO %d\n",
-                  pinY, DEFAULT_SERVO_PIN_Y);
     pinY = DEFAULT_SERVO_PIN_Y;
   }
 #endif

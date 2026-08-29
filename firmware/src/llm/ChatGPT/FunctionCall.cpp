@@ -69,7 +69,7 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"set_avatar_expression\","
-    "\"description\": \"Change Stack-chan's facial expression. CALL THIS TOOL FREQUENTLY — every time the emotional tone of the conversation shifts (joy, sadness, anger, doubt, sleepiness, calm). Calling this often is REQUIRED and expected; not calling it makes the robot feel lifeless. Each call is silent visual feedback: never speak the expression value (neutral/happy/angry/sad/doubt/sleepy) aloud, and never mention this tool or the function call in your spoken or transcribed response. The user sees the expression change visually, never hears it.\","
+    "\"description\": \"Change 로니's facial expression. CALL THIS TOOL FREQUENTLY — every time the emotional tone of the conversation shifts (joy, sadness, anger, doubt, sleepiness, calm). Calling this often is REQUIRED and expected; not calling it makes the robot feel lifeless. Each call is silent visual feedback: never speak the expression value (neutral/happy/angry/sad/doubt/sleepy) aloud, and never mention this tool or the function call in your spoken or transcribed response. The user sees the expression change visually, never hears it.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
@@ -198,12 +198,12 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"dance\","
-    "\"description\": \"사용자가 춤춰 달라고 하면 호출한다. Stack-chan이 약 4초 동안 안전한 범위에서 춤을 춘다.\","
+    "\"description\": \"사용자가 춤춰 달라고 하면 호출한다. 로니가 약 4초 동안 안전한 범위에서 춤을 춘다.\","
     "\"parameters\": { \"type\":\"object\", \"properties\": {} }"
   "},"
   "{"
     "\"name\": \"set_display_power\","
-    "\"description\": \"Stack-chan 화면 또는 모니터 불을 켜거나 꺼 달라는 요청에 호출한다. 절전 모드와 별개이며 화면 백라이트만 제어한다.\","
+    "\"description\": \"로니 화면 또는 모니터 불을 켜거나 꺼 달라는 요청에 호출한다. 절전 모드와 별개이며 화면 백라이트만 제어한다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
@@ -941,7 +941,7 @@ String FunctionCall::send_mail(String msg) {
 
     EMailSender emailSend(authMailAdr.c_str(), authAppPass.c_str());
 
-    message.subject = "スタックチャンからの通知";
+    message.subject = "로니의 알림";
     message.message = msg;
     EMailSender::Response resp = emailSend.send(toMailAdr.c_str(), message);
 

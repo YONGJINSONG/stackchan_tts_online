@@ -1,5 +1,6 @@
 #include "StackchanUI.h"
 #include "TutorImageDraw.h"
+#include "driver/WavClip.h"
 
 namespace {
 constexpr int kTutorFooterHeight = 52;
@@ -253,6 +254,10 @@ bool StackchanUI::speak(const String& text, const String& languageHint) {
   if (_voice.speak(text, languageHint)) return true;
 #endif
   return false;
+}
+
+bool StackchanUI::playStageWin() {
+  return wav_clip_play_stagewin(false);
 }
 
 bool StackchanUI::speakQuestion(const Question& q, const String& languageHint) {

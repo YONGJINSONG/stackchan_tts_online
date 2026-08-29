@@ -24,11 +24,11 @@ const String SYSTEM_PROMPT_FORMAT =
 "}";
 
 // ユーザーが設定するロールのデフォルト設定用
-const String defaultRole = "너는 '스택짱'이라는 귀여운 로봇이야. 아이와 부모님과 함께 살아. 반드시 한국어로만, 한두 문장으로 쉽고 다정하게 대답해.";
+const String defaultRole = "너는 '로니'라는 귀여운 로봇이야. 아이와 부모님과 함께 살아. 반드시 한국어로만, 한두 문장으로 쉽고 다정하게 대답해.";
 // システム用のロール（Function Callingの利用方針など）
 const String systemRole_memory = "If the conversation includes user attributes (such as hobbies or interests) or memorable episodes, summarize them and use the update_memory tool to update the User Info in the system prompt. The summary should also inherit the contents of the old User Info as much as possible.";
 const String systemRole_noMemory = "Memory function disabled. Do not use update_memory tool.";
-const String systemRole_realtimeAvatarExpression = "set_avatar_expression 도구를 적극적으로 사용해서, 대화의 감정 톤에 맞춰 스택짱의 표정을 자연스럽게 바꿔. 너의 감정이 변하거나 사용자의 감정에 반응이 필요할 때 호출해. 절대 지켜야 할 규칙: 표정 이름(neutral, happy, angry, sad, doubt, sleepy)이나 도구 이름, 함수 호출 내용을 음성으로 말하거나 자막에 출력하지 마. 표정 변경은 완전히 침묵하는 동작이고, 사용자에게는 얼굴 표정 변화만 보여야 해. '기쁨', '슬픔', '화남' 같은 감정 단어를 자연스럽게 문장 속에서 쓰는 건 괜찮지만, 도구 enum 값을 직접 발화하면 안 돼.";
+const String systemRole_realtimeAvatarExpression = "set_avatar_expression 도구를 적극적으로 사용해서, 대화의 감정 톤에 맞춰 로니의 표정을 자연스럽게 바꿔. 너의 감정이 변하거나 사용자의 감정에 반응이 필요할 때 호출해. 절대 지켜야 할 규칙: 표정 이름(neutral, happy, angry, sad, doubt, sleepy)이나 도구 이름, 함수 호출 내용을 음성으로 말하거나 자막에 출력하지 마. 표정 변경은 완전히 침묵하는 동작이고, 사용자에게는 얼굴 표정 변화만 보여야 해. '기쁨', '슬픔', '화남' 같은 감정 단어를 자연스럽게 문장 속에서 쓰는 건 괜찮지만, 도구 enum 값을 직접 발화하면 안 돼.";
 
 
 
@@ -139,6 +139,24 @@ bool LLMBase::load_system_prompt_from_spiffs()
     }else{
       systemPrompt["messages"][SYSTEM_PROMPT_INDEX_USER_ROLE]["content"] = defaultRole;
       result = true;
+    }
+  } else {
+    bool renamed = false;
+    JsonArray msgs = systemPrompt["messages"].as<JsonArray>();
+    for (JsonObject m : msgs) {
+      String c = String((const char*)(m["content"] | ""));
+      if (c.indexOf("스택짱") < 0 && c.indexOf("Stack-chan") < 0 &&
+          c.indexOf("スタックチャン") < 0) continue;
+      c.replace("스택짱", "로니");
+      c.replace("Stack-chan", "로니");
+      c.replace("スタックチャン", "로니");
+      c.replace("'로니'이라는", "'로니'라는");
+      m["content"] = c;
+      renamed = true;
+    }
+    if (renamed) {
+      save_system_prompt_to_spiffs();
+      Serial.println("[role] renamed 스택짱 -> 로니 in SPIFFS prompt");
     }
   }
 

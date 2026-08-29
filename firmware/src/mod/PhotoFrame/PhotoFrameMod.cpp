@@ -13,8 +13,14 @@
 #include <WiFiClientSecure.h>
 #include "llm/ChatGPT/FunctionCall.h"  //APP_DATA_PATHのため
 #include "share/SdBus.h"   // CoreS3: SD読込中はアバター描画を止めてGPIO35をMISO入力に固定
+#include <M5Unified.h>
 
 using namespace m5avatar;
+
+namespace m5avatar {
+extern volatile bool g_avatar_render_pause;
+extern volatile bool g_avatar_sd_paused;
+}
 
 
 /// 外部参照 ///
@@ -144,7 +150,7 @@ void PhotoFrameMod::pause(void)
   photoList.clear();
   avatar.set_isSubWindowEnable(false);
   avatar.setSpeechText("");
-
+  g_avatar_render_pause = false;
 }
 
 
@@ -235,13 +241,14 @@ void PhotoFrameMod::createPhotoList(const String& dirPath) {
       String base = (sl >= 0) ? orig.substring(sl + 1) : orig;
       String low = base; low.toLowerCase();
       bool isJpg = low.endsWith(".jpg") || low.endsWith(".jpeg");
+      bool isBmp = low.endsWith(".bmp");
       bool isHidden = base.startsWith(".") || base.startsWith("_");
-      if (isJpg && !isHidden) {
+      if ((isJpg || isBmp) && !isHidden) {
         String full = dirPath + "/" + base;
         photoList.push_back(full);
         Serial.printf(" (added: %s)\n", full.c_str());
       } else {
-        Serial.println(" (skipped: not .jpg)");
+        Serial.println(" (skipped: not .jpg/.bmp)");
       }
     }
   }
@@ -251,6 +258,7 @@ void PhotoFrameMod::updatePhoto(){
   if (photoList.empty()) {   // nothing to show — show a notice instead of crashing
     avatar.set_isSubWindowEnable(false);
     avatar.setSpeechText("사진이 없어요");
+    g_avatar_render_pause = false;
     Serial.printf("[photo] empty (looked in %s)\n", pf_base_dir().c_str());
     return;
   }
@@ -258,42 +266,78 @@ void PhotoFrameMod::updatePhoto(){
   String fname = photoList[g_photoIdx];
   Serial.printf("Next photo : %s\n", fname.c_str());
 
-  // CoreS3: SDとLCDがSPIバス(GPIO35=MISO/DC)を共有するため、SD読込中は
-  // アバターの描画タスクを止めてGPIO35をMISO入力に固定する(でないと描画と衝突して
-  // "does not exist"/ff_sd_status で読み込み失敗する)。
-  // SAFETY: a 320x240 JPEG is ~10-30KB. A full-size photo (MB) blows up the JPEG
-  // decoder's internal-heap allocation → OOM. Skip oversized files (>200KB).
+  String low = fname;
+  low.toLowerCase();
+  bool isBmp = low.endsWith(".bmp");
+  const size_t maxBytes = isBmp ? (300 * 1024) : (200 * 1024);
+
   bool notFound = false, oversized = false, ok = false;
 
   sd_bus_lock();
   {
-    SD.begin(GPIO_NUM_4, SPI, 25000000);   // 念のため再マウント(他機能の SD.end() で外れていても自己復旧)
+    SD.begin(GPIO_NUM_4, SPI, 25000000);
     File pf = SD.open(fname.c_str());
     if (!pf) {
       notFound = true;
     } else {
-      size_t fsz = pf.size(); pf.close();
-      if (fsz > 200 * 1024) oversized = true;
+      size_t fsz = pf.size();
+      pf.close();
+      if (fsz > maxBytes) oversized = true;
     }
   }
+  uint8_t* buf = nullptr;
+  size_t n = 0;
   if (!notFound && !oversized) {
-    ok = avatar.updateSubWindowJpg(fname);   // copySDFileToRAM でSDから読み込む(描画は再開後)
+    File pf = SD.open(fname.c_str(), FILE_READ);
+    if (!pf) {
+      notFound = true;
+    } else {
+      n = pf.size();
+      buf = (uint8_t*)ps_malloc(n);
+      if (buf == nullptr) buf = (uint8_t*)malloc(n);
+      if (buf != nullptr) {
+        size_t got = pf.read(buf, n);
+        pf.close();
+        if (got != n) {
+          free(buf);
+          buf = nullptr;
+        }
+      } else {
+        pf.close();
+      }
+    }
   }
   sd_bus_unlock();
 
+  if (buf != nullptr) {
+    g_avatar_render_pause = true;
+    uint32_t t0 = millis();
+    while (!g_avatar_sd_paused && (millis() - t0 < 400)) delay(2);
+    avatar.set_isSubWindowEnable(false);
+    avatar.setSpeechText("");
+    if (isBmp) {
+      ok = M5.Display.drawBmp(buf, n, 0, 0);
+    } else {
+      ok = M5.Display.drawJpg(buf, n, 0, 0);
+    }
+    free(buf);
+  }
+
   if (notFound) {
     Serial.printf("[photo] NOT FOUND: %s\n", fname.c_str());
+    g_avatar_render_pause = false;
     avatar.set_isSubWindowEnable(false);
     avatar.setSpeechText((String("파일없음:") + fname).c_str());
   } else if (oversized) {
     Serial.printf("[photo] skip oversized %s\n", fname.c_str());
+    g_avatar_render_pause = false;
     avatar.set_isSubWindowEnable(false);
     avatar.setSpeechText("사진 너무 큼(320x240)");
   } else if (!ok) {
+    g_avatar_render_pause = false;
     avatar.set_isSubWindowEnable(false);
-    avatar.setSpeechText("디코드 실패(표준 JPEG?)");   // 파일은 있는데 JPEG 디코드 실패(progressive/CMYK 등)
+    avatar.setSpeechText(isBmp ? "디코드 실패(BMP)" : "디코드 실패(표준 JPEG?)");
   } else {
     avatar.setSpeechText("");
-    avatar.set_isSubWindowEnable(true);
   }
 }

@@ -46,7 +46,7 @@ static const char* ROLE_TEACHER =
   "날씨·미세먼지·급식·할일·일정은 도구로 확인해 짧게 알려주고, 새로 알게 된 사실은 update_memory 도구로 조용히 저장해.";
 
 static const char* ROLE_SECRETARY =
-  "너는 '로니'이라는 사용자의 유능한 비서야. 차분하고 정중한 존댓말로, 간결하고 똑부러지게 도와줘. 핵심만 명확하게 전달해. "
+  "너는 '로니'라는 사용자의 유능한 비서야. 차분하고 정중한 존댓말로, 간결하고 똑부러지게 도와줘. 핵심만 명확하게 전달해. "
   "반드시 한국어로만, 한두 문장으로 짧게 말해. "
   "감정이 바뀔 때마다(기쁨/슬픔/화남/궁금/졸림/평온) set_avatar_expression 도구로 표정을 바꾸되, "
   "표정 이름이나 도구·함수 이름, 함수 호출 내용은 절대 음성·자막에 노출하지 마세요. 자기 표정 묘사도 금지(감정 단어는 OK). "
@@ -85,6 +85,15 @@ static void save_to_spiffs() {
   serializeJson(doc, f);
   f.close();
   Serial.printf("[persona] saved %d presets (active=%d)\n", (int)g_presets.size(), g_active);
+}
+
+static bool rename_legacy_name(String& s) {
+  bool hit = false;
+  if (s.indexOf("스택짱") >= 0) { s.replace("스택짱", "로니"); hit = true; }
+  if (s.indexOf("Stack-chan") >= 0) { s.replace("Stack-chan", "로니"); hit = true; }
+  if (s.indexOf("スタックチャン") >= 0) { s.replace("スタックチャン", "로니"); hit = true; }
+  if (s.indexOf("'로니'이라는") >= 0) { s.replace("'로니'이라는", "'로니'라는"); hit = true; }
+  return hit;
 }
 
 static bool load_from_spiffs() {
@@ -130,6 +139,14 @@ void persona_init() {
     save_to_spiffs();
     Serial.println("[persona] seeded default presets (기본/친구/선생님/비서)");
   } else {
+    bool renamed = false;
+    for (auto& p : g_presets) {
+      if (rename_legacy_name(p.role)) renamed = true;
+    }
+    if (renamed) {
+      save_to_spiffs();
+      Serial.println("[persona] renamed 스택짱 -> 로니 in SPIFFS presets");
+    }
     Serial.printf("[persona] loaded %d presets (active=%d)\n", (int)g_presets.size(), g_active);
   }
   unlock();

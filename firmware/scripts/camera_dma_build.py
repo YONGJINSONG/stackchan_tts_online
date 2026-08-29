@@ -35,35 +35,51 @@ hal_queue_old = (
 )
 hal_queue_new = (
     "    size_t queue_size = cam_obj->dma_half_buffer_cnt - 1;\n"
-    "    if (queue_size < 8) {\n"
-    "        queue_size = 8;\n"
+    "    if (queue_size < 32) {\n"
+        "        queue_size = 32;\n"
     "    }\n"
 )
 hal_psram_old = (
+    "    cam_obj->jpeg_mode = config->pixel_format == PIXFORMAT_JPEG;\n"
     "#if CONFIG_IDF_TARGET_ESP32\n"
     "    cam_obj->psram_mode = false;\n"
     "#else\n"
     "    cam_obj->psram_mode = (config->xclk_freq_hz == 16000000);\n"
     "#endif\n"
 )
+hal_ovf_old = (
+    "        ll_cam_stop(cam);\n"
+    "        cam->state = CAM_STATE_IDLE;\n"
+    "        ESP_CAMERA_ETS_PRINTF(DRAM_STR(\"cam_hal: EV-%s-OVF\\r\\n\"), cam_event==CAM_IN_SUC_EOF_EVENT ? DRAM_STR(\"EOF\") : DRAM_STR(\"VSYNC\"));\n"
+)
+hal_ovf_new = (
+    "        ll_cam_stop(cam);\n"
+    "        cam->state = CAM_STATE_IDLE;\n"
+    "        static uint8_t s_ovf_log;\n"
+    "        if (s_ovf_log < 3) {\n"
+    "            s_ovf_log++;\n"
+    "            ESP_CAMERA_ETS_PRINTF(DRAM_STR(\"cam_hal: EV-%s-OVF\\r\\n\"), cam_event==CAM_IN_SUC_EOF_EVENT ? DRAM_STR(\"EOF\") : DRAM_STR(\"VSYNC\"));\n"
+    "        }\n"
+)
 hal_psram_new = (
+    "    cam_obj->jpeg_mode = config->pixel_format == PIXFORMAT_JPEG;\n"
     "#if CONFIG_IDF_TARGET_ESP32\n"
     "    cam_obj->psram_mode = false;\n"
     "#else\n"
-    "    // Keep 20 MHz XCLK. GC0308 PCLK is already /4, so RGB565 can DMA\n"
-    "    // straight into PSRAM instead of memcpy from a 15 KB SRAM bounce\n"
-    "    // buffer. That memcpy is what overflows the EOF queue while Wi-Fi\n"
-    "    // holds the PSRAM bus.\n"
-    "    cam_obj->psram_mode = true;\n"
+    "    // CoreS3 GC0308 RGB565 stability fix.\n"
+    "    // Do NOT DMA RGB565 directly into PSRAM.\n"
+    "    // Use internal-RAM bounce buffers, then copy to PSRAM FB.\n"
+    "    cam_obj->psram_mode = false;\n"
     "#endif\n"
 )
 hal_text = open(camera_hal_source, "r", encoding="utf-8").read()
-if hal_queue_old not in hal_text or hal_psram_old not in hal_text:
-    print("[camera-dma] cam_hal.c queue or psram snippet not found")
+if hal_queue_old not in hal_text or hal_psram_old not in hal_text or hal_ovf_old not in hal_text:
+    print("[camera-dma] cam_hal.c queue, psram, or ovf snippet not found")
     env.Exit(1)
-hal_text = hal_text.replace(hal_queue_old, hal_queue_new, 1)
 open(os.path.join(patched_hal_dir, "cam_hal.c"), "w", encoding="utf-8", newline="\n").write(
-    hal_text.replace(hal_psram_old, hal_psram_new, 1)
+    hal_text.replace(hal_queue_old, hal_queue_new, 1)
+    .replace(hal_psram_old, hal_psram_new, 1)
+    .replace(hal_ovf_old, hal_ovf_new, 1)
 )
 
 gc_pclk_old = (
@@ -75,9 +91,9 @@ gc_pclk_new = (
     "#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)\n"
     "        write_reg(sensor->slv_addr, 0xfe, 0x00);\n"
     "#ifdef CONFIG_IDF_TARGET_ESP32S3\n"
-    "        // CoreS3 keeps 20 MHz XCLK and a 16 KB DMA ceiling, so the first\n"
-    "        // cam_start() must already be at XCLK/4 (~5 MHz PCLK).\n"
-    "        write_reg(sensor->slv_addr, 0x28, 0x32);\n"
+    "        // Bounce-DMA copy into PSRAM needs extra time between EOFs.\n"
+    "        // XCLK/8 (~2.5 MHz PCLK) at 20 MHz XCLK.\n"
+    "        write_reg(sensor->slv_addr, 0x28, 0x72);\n"
     "#else\n"
     "        set_reg_bits(sensor->slv_addr, 0x28, 4, 0x07, 1);  //frequency division for esp32, ensure pclk <= 15MHz\n"
     "#endif\n"
@@ -102,7 +118,7 @@ gc_text = gc_text.replace(gc_tag_old, gc_tag_new, 1)
 open(os.path.join(patched_sensor_dir, "gc0308.c"), "w", encoding="utf-8", newline="\n").write(
     gc_text.replace(gc_pclk_old, gc_pclk_new, 1)
 )
-print("[camera-dma] patched cam_hal.c EOF queue/psram DMA and gc0308.c S3 PCLK")
+print("[camera-dma] patched cam_hal.c bounce DMA + EOF queue 32, gc0308.c S3 PCLK /8")
 
 camera_private_includes = [
     os.path.join(camera_source_root, "driver", "include"),
@@ -144,6 +160,12 @@ env.BuildSources(
     env.subst("$BUILD_DIR/camera_dma"),
     os.path.join(camera_source_root, "target", "esp32s3"),
     src_filter="+<ll_cam.c>",
+)
+# -include CameraDmaConfig.h is not a SCons dependency, so bump the object
+# whenever the header changes.
+env.Depends(
+    env.subst("$BUILD_DIR/camera_dma/ll_cam.o"),
+    camera_dma_header,
 )
 env.BuildSources(
     env.subst("$BUILD_DIR/camera_hal"),

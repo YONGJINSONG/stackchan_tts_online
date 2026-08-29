@@ -17,8 +17,14 @@
   #define DEFAULT_SERVO_PIN_X 21
   #define DEFAULT_SERVO_PIN_Y 22
 #elif defined( ARDUINO_M5STACK_CORES3 )
-  #define DEFAULT_SERVO_PIN_X 1   //CoreS3 PORT A (Stack-chan 기본). PORT C면 18/17
+#if defined(ENABLE_CAMERA)
+  // Port A GPIO2 is GC0308 XCLK. Head PWM must live on Port C.
+  #define DEFAULT_SERVO_PIN_X 18
+  #define DEFAULT_SERVO_PIN_Y 17
+#else
+  #define DEFAULT_SERVO_PIN_X 1   // Port A when camera is off
   #define DEFAULT_SERVO_PIN_Y 2
+#endif
 #elif defined( ARDUINO_M5STACK_ATOMS3R )
   #define DEFAULT_SERVO_PIN_X 0   //非対応
   #define DEFAULT_SERVO_PIN_Y 0

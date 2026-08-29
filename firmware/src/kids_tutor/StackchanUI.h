@@ -37,6 +37,7 @@ public:
   void showListening();
   void showTranscript(const String& text);
   bool speak(const String& text, const String& languageHint = "en");
+  bool playStageWin();
   bool speakQuestion(const Question& q, const String& languageHint = "en");
   bool listen(String& transcript, const String& languageHint = "en");
   void nod();

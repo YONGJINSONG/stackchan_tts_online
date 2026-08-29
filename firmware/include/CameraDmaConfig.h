@@ -2,18 +2,29 @@
 
 #include <sdkconfig.h>
 
-// esp32-camera 2.0.4 defaults to a 32 KiB internal DMA ping-pong buffer on
-// ESP32-S3. Realtime TLS/audio fragments internal RAM enough that the resulting
-// 30,720-byte QVGA allocation can fail. Keep 20 MHz XCLK and reduce only the
-// camera-build DMA ceiling; ll_cam then requests a 15,360-byte buffer.
 #if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(ENABLE_CAMERA)
-#undef CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX
-#define CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX 16384
 
-// Arduino-ESP32 pins esp32-camera's copy task to Core 0 by default. Realtime
-// Wi-Fi/WebSocket work also runs there and can starve the one-slot DMA event
-// queue. During a synchronous capture the application loop on Core 1 is
-// waiting, so run the high-priority copy task there instead.
+/*
+ * CoreS3 + GC0308 RGB565:
+ *
+ * Direct PSRAM DMA is PSRAM-bus contention that can tear RGB565 frames
+ * (horizontal bands). Use an internal-RAM DMA bounce buffer and let
+ * the CPU copy into the PSRAM framebuffer.
+ *
+ * QVGA RGB565 is 153600 bytes. A 16 KB ceiling makes ~20 EOF copies per
+ * frame, which overflows an 16-slot queue if memcpy stalls once. 32 KB
+ * drops that to ~10 copies per frame.
+ */
+
+#undef CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX
+#define CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX 32768
+
+#undef CONFIG_CAMERA_PSRAM_DMA
+#define CONFIG_CAMERA_PSRAM_DMA 0
+
+/*
+ * Camera copy task on Core 1 so Wi-Fi / WebSocket on Core 0 is not starved.
+ */
 #undef CONFIG_CAMERA_CORE0
 #undef CONFIG_CAMERA_CORE1
 #define CONFIG_CAMERA_CORE1 1

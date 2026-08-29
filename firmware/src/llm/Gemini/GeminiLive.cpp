@@ -39,7 +39,7 @@ static const char session_update[] =
               "{\"googleSearch\": {}}"
             "],"
             "\"systemInstruction\": {"
-              "\"parts\": [{\"text\": \"You are an AI robot named Stack-chan. Please speak in Japanese.\"}],"
+              "\"parts\": [{\"text\": \"You are an AI robot named 로니. Please speak in Korean.\"}],"
               "\"role\": \"user\""
             "}"
           "}"

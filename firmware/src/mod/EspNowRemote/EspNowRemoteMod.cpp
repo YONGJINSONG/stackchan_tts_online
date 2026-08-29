@@ -8,6 +8,7 @@
 #include <Avatar.h>
 #include "Robot.h"
 #include "EspNowRemoteMod.h"
+#include "StackchanExConfig.h"
 
 using namespace m5avatar;
 
@@ -148,6 +149,26 @@ void EspNowRemoteMod::init(void)
   // Probe A / B / C with hard 0↔180 writes (bypasses easing).
 #ifdef USE_SERVO
   if (robot && robot->servo) {
+    int homeX = robot->servo->currentPinX();
+    int homeY = robot->servo->currentPinY();
+#if defined(ARDUINO_M5STACK_CORES3)
+    if (homeX == 32 || homeX == 33 || homeX < 1) homeX = DEFAULT_SERVO_PIN_X;
+    if (homeY == 32 || homeY == 33 || homeY < 1 || homeY == 2) homeY = DEFAULT_SERVO_PIN_Y;
+#if defined(ENABLE_CAMERA)
+    homeX = DEFAULT_SERVO_PIN_X;
+    homeY = DEFAULT_SERVO_PIN_Y;
+#endif
+#endif
+    Serial.printf("[EspNowRemote] probe home pins x=%d y=%d\n", homeX, homeY);
+
+#if defined(ARDUINO_M5STACK_CORES3) && defined(ENABLE_CAMERA)
+    // Do not PWM GPIO2 (camera XCLK). Port C is the head on this build.
+    Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 (camera build) ===");
+    avatar.setSpeechText("Port C");
+    robot->servo->reattachOnPins(18, 17, "port-C");
+    robot->servo->hardSweep("port-C");
+    delay(400);
+#else
     Serial.println("[EspNowRemote] === PORT A hardSweep GPIO1/2 ===");
     avatar.setSpeechText("Port A");
     robot->servo->reattachOnPins(1, 2, "port-A");
@@ -164,7 +185,12 @@ void EspNowRemoteMod::init(void)
     avatar.setSpeechText("Port C");
     robot->servo->reattachOnPins(18, 17, "port-C");
     robot->servo->hardSweep("port-C");
-    Serial.println("[EspNowRemote] === probes done; active pins left at 18/17 ===");
+    delay(400);
+#endif
+
+    robot->servo->reattachOnPins(homeX, homeY, "restore-home");
+    Serial.printf("[EspNowRemote] === probes done; restored pins x=%d y=%d ===\n",
+                  homeX, homeY);
     Serial.println("[EspNowRemote] If NONE moved: measure Grove RED pin for ~5V, check servo plug/type (SG90 PWM vs SCS)");
     avatar.setSpeechText("");
   } else {
@@ -314,6 +340,7 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
   static bool s_logged_once = false;
   if (!s_logged_once) {
     s_logged_once = true;
+    M5.Power.setExtOutput(true);
     robot->servo->dumpAndReattach("espnow-first-packet");
   }
 
@@ -329,10 +356,11 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
                            ESPNOW_REMOTE_SERVO_Y_MIN);
   uint32_t millis_for_move = (speed < 0) ? 0 : static_cast<uint32_t>(speed);
 
-  //robot->servo->moveTo(servo_x, servo_y, millis_for_move);
-  robot->servo->moveTo(servo_x, servo_y, 100);
-  Serial.printf("[EspNowRemote] servo x=%d y=%d move_ms=%lu\n",
-                servo_x, servo_y, static_cast<unsigned long>(millis_for_move));
+  robot->servo->writeOffset(servo_x, servo_y);
+  Serial.printf("[EspNowRemote] servo x=%d y=%d pins=%d/%d move_ms=%lu\n",
+                servo_x, servo_y,
+                robot->servo->currentPinX(), robot->servo->currentPinY(),
+                static_cast<unsigned long>(millis_for_move));
 #else
   (void)yaw; (void)pitch; (void)speed;
 #endif
