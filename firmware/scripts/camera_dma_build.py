@@ -58,10 +58,27 @@ hal_ovf_new = (
     "        ll_cam_stop(cam);\n"
     "        cam->state = CAM_STATE_IDLE;\n"
     "        static uint8_t s_ovf_log;\n"
-    "        if (s_ovf_log < 3) {\n"
+    "        if (s_ovf_log < 8) {\n"
     "            s_ovf_log++;\n"
     "            ESP_CAMERA_ETS_PRINTF(DRAM_STR(\"cam_hal: EV-%s-OVF\\r\\n\"), cam_event==CAM_IN_SUC_EOF_EVENT ? DRAM_STR(\"EOF\") : DRAM_STR(\"VSYNC\"));\n"
     "        }\n"
+)
+hal_stop_old = (
+    "void cam_stop(void)\n"
+    "{\n"
+    "    ll_cam_vsync_intr_enable(cam_obj, false);\n"
+    "    ll_cam_stop(cam_obj);\n"
+    "}\n"
+)
+hal_stop_new = (
+    "void cam_stop(void)\n"
+    "{\n"
+    "    ll_cam_vsync_intr_enable(cam_obj, false);\n"
+    "    ll_cam_stop(cam_obj);\n"
+    "    if (cam_obj) {\n"
+    "        cam_obj->state = CAM_STATE_IDLE;\n"
+    "    }\n"
+    "}\n"
 )
 hal_psram_new = (
     "    cam_obj->jpeg_mode = config->pixel_format == PIXFORMAT_JPEG;\n"
@@ -75,13 +92,19 @@ hal_psram_new = (
     "#endif\n"
 )
 hal_text = open(camera_hal_source, "r", encoding="utf-8").read()
-if hal_queue_old not in hal_text or hal_psram_old not in hal_text or hal_ovf_old not in hal_text:
-    print("[camera-dma] cam_hal.c queue, psram, or ovf snippet not found")
+if (
+    hal_queue_old not in hal_text
+    or hal_psram_old not in hal_text
+    or hal_ovf_old not in hal_text
+    or hal_stop_old not in hal_text
+):
+    print("[camera-dma] cam_hal.c queue, psram, ovf, or stop snippet not found")
     env.Exit(1)
 open(os.path.join(patched_hal_dir, "cam_hal.c"), "w", encoding="utf-8", newline="\n").write(
     hal_text.replace(hal_queue_old, hal_queue_new, 1)
     .replace(hal_psram_old, hal_psram_new, 1)
     .replace(hal_ovf_old, hal_ovf_new, 1)
+    .replace(hal_stop_old, hal_stop_new, 1)
 )
 
 gc_pclk_old = (

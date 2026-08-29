@@ -39,6 +39,7 @@ bool isSilentMode = false;
 static camera_config_t camera_config = {
     .pin_pwdn     = -1,
     .pin_reset    = -1,
+    // LCD_CAM drives 20 MHz on GPIO2. SCCB can ACK without it; PCLK cannot.
     .pin_xclk     = 2,
     .pin_sscb_sda = 12,
     .pin_sscb_scl = 11,
@@ -70,6 +71,7 @@ static camera_config_t camera_config = {
     .fb_count     = 1,
     .fb_location  = CAMERA_FB_IN_PSRAM,
     .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
+    .sccb_i2c_port = -1,
 };
 
 static bool camera_session_open = false;
@@ -215,10 +217,22 @@ bool camera_push_preview_rgb565(void) {
 }
 
 static void camera_release_xclk_pin(void) {
-    // GPIO2 is Port A servo Y. Camera XCLK (LEDC_CHANNEL_6) must not keep it.
+    // GPIO2 is LCD_CAM XCLK during capture. Drop the mux so Port A is idle.
     ledcDetachPin(2);
     gpio_reset_pin(GPIO_NUM_2);
-    Serial.println("[camera] XCLK LEDC released on GPIO2");
+    Serial.println("[camera] LCD_CAM XCLK released on GPIO2");
+}
+
+// AW9523 P1_0 is GC0308 CAM_RST (active low). Pulse while In_I2C is still up.
+static void camera_pulse_gc0308_reset(void) {
+    static constexpr uint8_t kAw9523 = 0x58;
+    static constexpr uint8_t kP1Out = 0x03;
+    static constexpr uint8_t kCamRst = 1u << 0;
+    bool lo = M5.In_I2C.bitOff(kAw9523, kP1Out, kCamRst, 400000);
+    delay(10);
+    bool hi = M5.In_I2C.bitOn(kAw9523, kP1Out, kCamRst, 400000);
+    delay(20);
+    Serial.printf("[camera] AW9523 CAM_RST pulse lo=%d hi=%d\n", lo ? 1 : 0, hi ? 1 : 0);
 }
 
 // cam_take() is the HAL queue pop used so we can retry on EOF-OVF.
@@ -304,14 +318,11 @@ static esp_err_t camera_session_begin(void){
     }
 
     //initialize the camera
+    // Do not gpio_reset 11/12: that glitches AW9523 (LCD/CAM_RST) on the same bus.
+    camera_pulse_gc0308_reset();
     M5.In_I2C.release();
-    // Speaker/codec and In_I2C share GPIO 11/12. GPIO2 is LCD_CAM XCLK.
-    // Reset so SCCB can read GC0308 PID (timeouts look like ESP_ERR_NOT_SUPPORTED).
-    gpio_reset_pin(GPIO_NUM_2);
-    gpio_reset_pin(GPIO_NUM_11);
-    gpio_reset_pin(GPIO_NUM_12);
-    delay(50);
-    Serial.println("[camera] GPIO2/11/12 reset for XCLK/SCCB; initializing GC0308");
+    delay(20);
+    Serial.println("[camera] In_I2C released; initializing GC0308 (LCD_CAM XCLK GPIO2)");
     camera_log_dma_heap("before init");
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
@@ -332,13 +343,13 @@ static esp_err_t camera_session_begin(void){
         return err;
     }
 
-    // esp_camera_init() enables VSYNC before we return. Stop the stream
-    // before touching PCLK so a fast burst cannot overflow the EOF queue.
-    cam_stop();
+    // Do not cam_stop() here. That halted GDMA while cam_task stayed in
+    // READ_BUF, so later cam_start() only re-enabled VSYNC IRQ and no
+    // frame ever completed (timeouts, no EV-EOF-OVF).
     sensor_t *s = esp_camera_sensor_get();
     s->set_hmirror(s, 0);
 
-    // 20 MHz XCLK with PCLK /4 (~5 MHz).
+    // 20 MHz XCLK with PCLK /4 (~5 MHz). Write while the stream is live.
     s->set_reg(s, 0xfe, 0xff, 0x00);
     int pclkResult = s->set_reg(s, 0x28, 0x77, 0x32);
     int pclkConfig = s->get_reg(s, 0x28, 0x77);
@@ -348,16 +359,17 @@ static esp_err_t camera_session_begin(void){
     int pixReg = s->get_reg(s, 0x24, 0xff);
     Serial.printf("[camera] GC0308 PCLK /4 set: result=%d reg=0x%02x pix=%d fs=%d 0x24=0x%02x\n",
                   pclkResult, pclkConfig, pixRes, fsRes, pixReg);
-    delay(50);
-    cam_start();
-    Serial.println("[camera] stream restarted");
+    delay(200);
+    Serial.println("[camera] stream left running after init");
     for (int i = 0; i < 3; i++) {
-        camera_fb_t *warm = camera_take_frame(800, 1);
+        camera_fb_t *warm = cam_take(pdMS_TO_TICKS(1500));
         if (!warm) {
             Serial.printf("[camera] warmup frame %d missed\n", i);
             continue;
         }
+        camera_stamp_fb(warm);
         cam_give(warm);
+        Serial.printf("[camera] warmup frame %d ok\n", i);
     }
 
     camera_session_open = true;
@@ -672,7 +684,7 @@ bool camera_capture_save_to(const char* destPath, String& outPath)
   if (!camera_ensure_preview_buf()) return false;
   if (camera_session_begin() != ESP_OK) return false;
   Serial.println("[camera] waiting for frame");
-  camera_fb_t *fb = camera_take_frame(1500, 6);
+  camera_fb_t *fb = camera_take_frame(2000, 3);
   if (!fb) {
     Serial.println("[camera] frame capture failed");
     camera_session_end();
