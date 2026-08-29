@@ -26,6 +26,8 @@ patched_hal_dir = os.path.join(patched_root, "driver")
 patched_sensor_dir = os.path.join(patched_root, "sensors")
 os.makedirs(patched_hal_dir, exist_ok=True)
 os.makedirs(patched_sensor_dir, exist_ok=True)
+patched_ll_dir = os.path.join(patched_root, "target", "esp32s3")
+os.makedirs(patched_ll_dir, exist_ok=True)
 
 hal_queue_old = (
     "    size_t queue_size = cam_obj->dma_half_buffer_cnt - 1;\n"
@@ -35,8 +37,8 @@ hal_queue_old = (
 )
 hal_queue_new = (
     "    size_t queue_size = cam_obj->dma_half_buffer_cnt - 1;\n"
-    "    if (queue_size < 32) {\n"
-        "        queue_size = 32;\n"
+    "    if (queue_size < 8) {\n"
+        "        queue_size = 8;\n"
     "    }\n"
 )
 hal_psram_old = (
@@ -91,9 +93,8 @@ gc_pclk_new = (
     "#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)\n"
     "        write_reg(sensor->slv_addr, 0xfe, 0x00);\n"
     "#ifdef CONFIG_IDF_TARGET_ESP32S3\n"
-    "        // Bounce-DMA copy into PSRAM needs extra time between EOFs.\n"
-    "        // XCLK/8 (~2.5 MHz PCLK) at 20 MHz XCLK.\n"
-    "        write_reg(sensor->slv_addr, 0x28, 0x72);\n"
+    "        // CoreS3 keeps 20 MHz XCLK; PCLK /4 (~5 MHz) for bounce DMA.\n"
+    "        write_reg(sensor->slv_addr, 0x28, 0x32);\n"
     "#else\n"
     "        set_reg_bits(sensor->slv_addr, 0x28, 4, 0x07, 1);  //frequency division for esp32, ensure pclk <= 15MHz\n"
     "#endif\n"
@@ -118,7 +119,22 @@ gc_text = gc_text.replace(gc_tag_old, gc_tag_new, 1)
 open(os.path.join(patched_sensor_dir, "gc0308.c"), "w", encoding="utf-8", newline="\n").write(
     gc_text.replace(gc_pclk_old, gc_pclk_new, 1)
 )
-print("[camera-dma] patched cam_hal.c bounce DMA + EOF queue 32, gc0308.c S3 PCLK /8")
+
+ll_clk_old = (
+    "    LCD_CAM.cam_ctrl.cam_clk_sel = 3;//Select Camera module source clock. 0: no clock. 1: APLL. 2: CLK160. 3: no clock.\n"
+)
+ll_clk_new = (
+    "    LCD_CAM.cam_ctrl.cam_clk_sel = 2;// CLK160. 2.0.4 value 3 is documented as no clock.\n"
+)
+ll_text = open(camera_ll_source, "r", encoding="utf-8").read()
+if ll_text.count(ll_clk_old) < 1:
+    print("[camera-dma] ll_cam.c cam_clk_sel snippet not found")
+    env.Exit(1)
+# ll_cam_config (probe XCLK) and xclk_timer_conf both ship as sel=3 / no clock.
+open(os.path.join(patched_ll_dir, "ll_cam.c"), "w", encoding="utf-8", newline="\n").write(
+    ll_text.replace(ll_clk_old, ll_clk_new)
+)
+print("[camera-dma] patched bounce DMA, EOF queue 8, S3 PCLK /4, cam_clk_sel CLK160")
 
 camera_private_includes = [
     os.path.join(camera_source_root, "driver", "include"),
@@ -135,7 +151,7 @@ def apply_camera_dma_config(build_env, node):
     """Force camera-only overrides into the source-built camera units."""
     source_path = node.srcnode().get_abspath().replace("\\", "/")
     if (
-        source_path.endswith("/esp32-camera/target/esp32s3/ll_cam.c")
+        source_path.endswith("/ll_cam.c")
         or source_path.endswith("/cam_hal.c")
     ):
         print("[camera-dma] applying camera config to " + os.path.basename(source_path))
@@ -158,7 +174,7 @@ env.AddBuildMiddleware(apply_camera_dma_config)
 # ll_cam object.
 env.BuildSources(
     env.subst("$BUILD_DIR/camera_dma"),
-    os.path.join(camera_source_root, "target", "esp32s3"),
+    patched_ll_dir,
     src_filter="+<ll_cam.c>",
 )
 # -include CameraDmaConfig.h is not a SCons dependency, so bump the object

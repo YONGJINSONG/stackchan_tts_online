@@ -305,7 +305,13 @@ static esp_err_t camera_session_begin(void){
 
     //initialize the camera
     M5.In_I2C.release();
-    Serial.println("[camera] internal I2C released; initializing GC0308");
+    // Speaker/codec and In_I2C share GPIO 11/12. GPIO2 is LCD_CAM XCLK.
+    // Reset so SCCB can read GC0308 PID (timeouts look like ESP_ERR_NOT_SUPPORTED).
+    gpio_reset_pin(GPIO_NUM_2);
+    gpio_reset_pin(GPIO_NUM_11);
+    gpio_reset_pin(GPIO_NUM_12);
+    delay(50);
+    Serial.println("[camera] GPIO2/11/12 reset for XCLK/SCCB; initializing GC0308");
     camera_log_dma_heap("before init");
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
@@ -332,16 +338,15 @@ static esp_err_t camera_session_begin(void){
     sensor_t *s = esp_camera_sensor_get();
     s->set_hmirror(s, 0);
 
-    // 20 MHz XCLK with PCLK /8 (~2.5 MHz). Bounce memcpy into PSRAM needs
-    // that extra time between EOFs while Wi-Fi still owns the PSRAM bus.
+    // 20 MHz XCLK with PCLK /4 (~5 MHz).
     s->set_reg(s, 0xfe, 0xff, 0x00);
-    int pclkResult = s->set_reg(s, 0x28, 0x77, 0x72);
+    int pclkResult = s->set_reg(s, 0x28, 0x77, 0x32);
     int pclkConfig = s->get_reg(s, 0x28, 0x77);
     int pixRes = s->set_pixformat(s, PIXFORMAT_RGB565);
     int fsRes = s->set_framesize(s, camera_config.frame_size);
     s->set_reg(s, 0xfe, 0xff, 0x00);
     int pixReg = s->get_reg(s, 0x24, 0xff);
-    Serial.printf("[camera] GC0308 PCLK /8 set: result=%d reg=0x%02x pix=%d fs=%d 0x24=0x%02x\n",
+    Serial.printf("[camera] GC0308 PCLK /4 set: result=%d reg=0x%02x pix=%d fs=%d 0x24=0x%02x\n",
                   pclkResult, pclkConfig, pixRes, fsRes, pixReg);
     delay(50);
     cam_start();
