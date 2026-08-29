@@ -5,6 +5,9 @@
 #include "Gesture.h"
 #include "Robot.h"
 #include "CameraVision.h"
+#if defined(REALTIME_API)
+#include "llm/RealtimeLLMBase.h"
+#endif
 
 using namespace m5avatar;
 
@@ -40,6 +43,18 @@ static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms)
     Serial.println("[gesture] skip (camera owns servo GPIO/I2C)");
     return;
   }
+  extern volatile bool espnow_remote_servo_override;
+  if (espnow_remote_servo_override) {
+    Serial.println("[gesture] skip (espnow remote owns servo)");
+    return;
+  }
+#if defined(REALTIME_API)
+  // Servo motion + Serial spam during listen competes with audio_append TLS writes.
+  if (robot->llm && ((RealtimeLLMBase*)robot->llm)->isRealtimeRecording()) {
+    Serial.println("[gesture] skip (listening)");
+    return;
+  }
+#endif
   if(millis() < g_servoManualUntil){   // 웹 조이스틱 수동 제어 중엔 제스처로 머리 안 움직임
     Serial.println("[gesture] skip (manual head control)");
     return;
@@ -136,6 +151,16 @@ void gesture_play(Expression e) {
   if(gestureQueue == NULL){
     Serial.println("[gesture] play called but queue is NULL");
     return;
+  }
+#if defined(REALTIME_API)
+  if (robot && robot->llm && ((RealtimeLLMBase*)robot->llm)->isRealtimeRecording()) {
+    // Don't even enqueue — queue overwrite + Serial during listen competes with TLS.
+    return;
+  }
+#endif
+  extern volatile bool espnow_remote_servo_override;
+  if (espnow_remote_servo_override) {
+    return;  // remote owns the head
   }
   Serial.printf("[gesture] play enqueue expression=%d\n", (int)e);
   GestureCommand command{GestureCommandType::Expression, e};

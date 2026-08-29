@@ -56,14 +56,18 @@ Robot::Robot(StackchanExConfig& config) : m_config(config)
   // Core2 Port A pins (32/33) are not PWM-capable on CoreS3. SD yaml often still
   // has them; remap to Port A defaults (1/2) so heads actually move.
   if (pinX == 32 || pinX == 33 || pinX < 1 || pinX > 48) {
-    Serial.printf("[servo] pin X=%d invalid on CoreS3 — using %d\n", pinX, DEFAULT_SERVO_PIN_X);
+    Serial.printf("[servo] WARNING: SD pin X=%d is Core2/invalid — remapped to Port A GPIO %d\n",
+                  pinX, DEFAULT_SERVO_PIN_X);
+    Serial.println("[servo] If head never moves, try Port C in SC_BasicConfig.yaml: x:18 y:17");
     pinX = DEFAULT_SERVO_PIN_X;
   }
   if (pinY == 32 || pinY == 33 || pinY < 1 || pinY > 48) {
-    Serial.printf("[servo] pin Y=%d invalid on CoreS3 — using %d\n", pinY, DEFAULT_SERVO_PIN_Y);
+    Serial.printf("[servo] WARNING: SD pin Y=%d is Core2/invalid — remapped to Port A GPIO %d\n",
+                  pinY, DEFAULT_SERVO_PIN_Y);
     pinY = DEFAULT_SERVO_PIN_Y;
   }
 #endif
+  Serial.printf("[servo] begin PWM on pinX=%d pinY=%d\n", pinX, pinY);
   servo->begin(pinX, config.getServoInfo(AXIS_X)->start_degree,
               config.getServoInfo(AXIS_X)->offset,
               pinY, config.getServoInfo(AXIS_Y)->start_degree,

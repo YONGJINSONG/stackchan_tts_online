@@ -1,4 +1,5 @@
 #include "StackchanUI.h"
+#include "TutorImageDraw.h"
 
 namespace {
 constexpr int kTutorFooterHeight = 52;
@@ -169,33 +170,43 @@ void StackchanUI::showQuestion(const Question& q, const std::vector<String>& cho
   M5.Display.fillScreen(TFT_BLACK);
   showStatusLine(subject, level, stars, questionNumber, questionTotal, remainingSeconds);
 
-  // CoreS3 shares the SD MISO pin with LCD control. drawPngFile reads SD while
-  // writing the panel and can reset the device, so use the reliable text layout
-  // there. Other boards retain image questions.
+  // Prefer procedural LCD drawing (no SD) so CoreS3 avoids SD+LCD bus clashes.
+  // Fallback: non-CoreS3 may still draw PNG from SD beside the question text.
+  const bool hasProc = tutor_image_has_spec(q.image);
 #if defined(ARDUINO_M5STACK_CORES3)
-  const bool hasImage = false;
+  const bool hasPng = false;
 #else
-  const bool hasImage = _fs && q.image.length() && _fs->exists(q.image);
+  const bool hasPng = !hasProc && _fs && q.image.length() && _fs->exists(q.image);
 #endif
   const int width = M5.Display.width();
   const int footerTop = M5.Display.height() - kTutorFooterHeight;
   const int questionTop = 32;
-  const int choiceY = max(questionTop + 48, footerTop - 96);
-  const int questionHeight = choiceY - questionTop - 4;
+  const int rowCount = 3;
+  // Reserve space for choices; with a figure, leave a centered band between
+  // question text and the choice block.
+  const int choiceBlock = hasProc ? 84 : 96;
+  const int choiceY = max(questionTop + (hasProc ? 36 : 48), footerTop - choiceBlock);
+  const int figH = hasProc ? max(40, choiceY - questionTop - 40) : 0;
+  const int figTop = hasProc ? (questionTop + 34) : 0;
   int textX = 8;
   int textWidth = width - 16;
-  int questionLines = max(1, min(3, questionHeight / 16));
-  if (hasImage) {
+  int questionLines = hasProc ? 2 : max(1, min(3, (choiceY - questionTop - 4) / 16));
+
+  if (hasProc) {
+    drawWrapped(q.question, textX, questionTop, textWidth, 16, questionLines);
+    tutor_image_draw(q.image, 8, figTop, width - 16, figH);
+  } else if (hasPng) {
+    const int questionHeight = choiceY - questionTop - 4;
     const int imgMax = min(56, questionHeight);
     const int imgX = 8;
-    // M5GFX on this PlatformIO pinout expects a path (SD), not fs::FS& + path.
     M5.Display.drawPngFile(q.image.c_str(), imgX, questionTop, imgMax, imgMax);
     textX = imgX + imgMax + 8;
     textWidth = width - textX - 8;
+    drawWrapped(q.question, textX, questionTop, textWidth, 16, questionLines);
+  } else {
+    drawWrapped(q.question, textX, questionTop, textWidth, 16, questionLines);
   }
 
-  drawWrapped(q.question, textX, questionTop, textWidth, 16, questionLines);
-  const int rowCount = 3;
   const int choiceHeight = max(24, (footerTop - choiceY) / rowCount);
   int y = choiceY;
   for (size_t i = 0; i < choices.size() && i < 3; ++i) {

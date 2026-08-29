@@ -213,7 +213,8 @@ void proximity_tick() {
 #if defined(REALTIME_API)
     if (robot && robot->llm) {
       RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
-      busy = rt->isRealtimeRecordRequested() || rt->isSpeaking();
+      RealtimeStateSnapshot state = rt->getRealtimeStateSnapshot();
+      busy = state.recordRequested || state.speaking;
     }
 #endif
     bool veryNear = ps >= c.veryNearThreshold;

@@ -116,6 +116,7 @@ EspNowRemoteMod::EspNowRemoteMod(void)
 
 void EspNowRemoteMod::init(void)
 {
+  Serial.println("[EspNowRemote] === init begin ===");
   avatar.setSpeechText("ESP-NOW Receiver");
   avatar.updateSubWindowTxt("ESP-NOW Receiver\nChannel: 1\nServo control enabled", 0, 0, 240, 80);
   avatar.set_isSubWindowEnable(true);
@@ -125,10 +126,54 @@ void EspNowRemoteMod::init(void)
 
   espnow_remote_servo_override = true;
 
+  // Servos need Port-A/C 5V. Force ext output on while remote owns the head
+  // (takao_base=true otherwise disables this and leaves PWM with no power).
+  M5.Power.setExtOutput(true);
+  delay(50);
+  M5.Power.setExtOutput(true);
+  Serial.printf("[EspNowRemote] power extOut=%d usbOut=%d bat=%d%% batCurr=%dmA\n",
+                (int)M5.Power.getExtOutput(),
+                (int)M5.Power.getUsbOutput(),
+                M5.Power.getBatteryLevel(),
+                (int)M5.Power.getBatteryCurrent());
+  if (!M5.Power.getExtOutput()) {
+    Serial.println("[EspNowRemote] ERROR: ExtOutput still OFF — Grove 5V is likely dead");
+  }
+
   espnow_started = startEspNowReceiver();
   if(!espnow_started){
     avatar.updateSubWindowTxt("ESP-NOW init failed\nSee serial monitor", 0, 0, 220, 80);
   }
+
+  // Probe A / B / C with hard 0↔180 writes (bypasses easing).
+#ifdef USE_SERVO
+  if (robot && robot->servo) {
+    Serial.println("[EspNowRemote] === PORT A hardSweep GPIO1/2 ===");
+    avatar.setSpeechText("Port A");
+    robot->servo->reattachOnPins(1, 2, "port-A");
+    robot->servo->hardSweep("port-A");
+    delay(400);
+
+    Serial.println("[EspNowRemote] === PORT B hardSweep GPIO8/9 ===");
+    avatar.setSpeechText("Port B");
+    robot->servo->reattachOnPins(8, 9, "port-B");
+    robot->servo->hardSweep("port-B");
+    delay(400);
+
+    Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 ===");
+    avatar.setSpeechText("Port C");
+    robot->servo->reattachOnPins(18, 17, "port-C");
+    robot->servo->hardSweep("port-C");
+    Serial.println("[EspNowRemote] === probes done; active pins left at 18/17 ===");
+    Serial.println("[EspNowRemote] If NONE moved: measure Grove RED pin for ~5V, check servo plug/type (SG90 PWM vs SCS)");
+    avatar.setSpeechText("");
+  } else {
+    Serial.println("[EspNowRemote] ERROR: robot/servo is null — cannot drive head");
+  }
+#else
+  Serial.println("[EspNowRemote] ERROR: USE_SERVO not defined in this build");
+#endif
+  Serial.println("[EspNowRemote] === init end ===");
 }
 
 void EspNowRemoteMod::pause(void)
@@ -266,6 +311,12 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
     return;
   }
 
+  static bool s_logged_once = false;
+  if (!s_logged_once) {
+    s_logged_once = true;
+    robot->servo->dumpAndReattach("espnow-first-packet");
+  }
+
   int servo_x = mapClamped(yaw,
                            ESPNOW_REMOTE_YAW_MIN,
                            ESPNOW_REMOTE_YAW_MAX,
@@ -282,5 +333,7 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
   robot->servo->moveTo(servo_x, servo_y, 100);
   Serial.printf("[EspNowRemote] servo x=%d y=%d move_ms=%lu\n",
                 servo_x, servo_y, static_cast<unsigned long>(millis_for_move));
+#else
+  (void)yaw; (void)pitch; (void)speed;
 #endif
 }

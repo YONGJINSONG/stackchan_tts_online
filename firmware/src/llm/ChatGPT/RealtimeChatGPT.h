@@ -31,9 +31,11 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     String pendingProactiveText;
     volatile bool hasPendingProactive = false;
 
-    // Persona switch: requestReconnect() (any task) sets this; onWebSocketTick()
-    // (WS task) performs the actual disconnect so the next session uses the new role.
-    volatile bool reconnectRequest = false;
+    // Any task may queue a reconnect, but only onWebSocketTick() touches the socket.
+    SemaphoreHandle_t reconnectMux = NULL;
+    bool reconnectRequest = false;
+    String reconnectReason;
+    uint32_t sessionUpdateSentAt = 0;
 
     volatile bool hasDeferredFunctionCall = false;
     String deferredFunctionCallId;
@@ -43,10 +45,14 @@ public:
 
     virtual void chat(String text, const char *base64_buf = NULL) {};   //dummy
     virtual String& buildInputAudioJson(String& jsonBuf, String& base64);
+    void audioAppendEnvelope(const char*& prefix, const char*& suffix) override;
+    bool sendTextChecked(const char* label, const String& payload) override;
+    bool sendTextChecked(const char* label, const char* payload, size_t length) override;
     virtual void load_role();
     void pushUserText(const String& text) override;
     void onWebSocketTick() override;
     void requestReconnect() override;
+    void queueReconnect(const char* reason);
 };
 
 

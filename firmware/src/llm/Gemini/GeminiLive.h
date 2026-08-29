@@ -27,6 +27,7 @@ public:
 
     virtual void chat(String text, const char *base64_buf = NULL) {};   //dummy
     virtual String& buildInputAudioJson(String& jsonBuf, String& base64);
+    void audioAppendEnvelope(const char*& prefix, const char*& suffix) override;
     virtual void load_role();
 };
 

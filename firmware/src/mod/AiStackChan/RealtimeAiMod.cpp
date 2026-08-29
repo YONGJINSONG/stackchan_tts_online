@@ -205,13 +205,13 @@ void RealtimeAiMod::idle(void)
 
   if(robot->asyncPlaying || (pRtLLM->getOutputTextQueueSize() != 0)){
     // 発話中
-    pRtLLM->setSpeaking(true);
+    pRtLLM->setRealtimeSpeaking(true);
     servo_home = false;
     avatar.setExpression(Expression::Happy);
   }
   else{
     // 発話停止中かつキューにテキストがない場合はLLM機能に発話終了を通知
-    pRtLLM->setSpeaking(false);
+    pRtLLM->setRealtimeSpeaking(false);
     servo_home = true;
     avatar.setExpression(Expression::Neutral);
   }
@@ -284,7 +284,8 @@ void RealtimeAiMod::alarmEventHandler()
 
 bool RealtimeAiMod::isBusy(void)
 {
-  if(pRtLLM->isRealtimeRecordRequested() || pRtLLM->isSpeaking()){
+  RealtimeStateSnapshot state = pRtLLM->getRealtimeStateSnapshot();
+  if(state.recordRequested || state.speaking){
     return true;
   }else{
     return false;
@@ -293,11 +294,12 @@ bool RealtimeAiMod::isBusy(void)
 
 void RealtimeAiMod::toggleRealtimeRecord(void)
 {
-  if(pRtLLM->isRealtimeRecordRequested()){
-    if(!pRtLLM->isRealtimeSessionReady()){
-      // A tap while reconnecting means the user is still waiting to talk; do
-      // not turn that pending request into a cancellation.
-      Serial.println("[realtime] listen already queued - waiting for reconnect");
+  RealtimeStateSnapshot state = pRtLLM->getRealtimeStateSnapshot();
+  if(state.recordRequested){
+    if(!state.sessionReady){
+      pRtLLM->stopRealtimeRecord();
+      avatar.setSpeechText("터치하면 시작");
+      Serial.println("[realtime] queued listen cancelled by touch");
       return;
     }
     pRtLLM->stopRealtimeRecord();

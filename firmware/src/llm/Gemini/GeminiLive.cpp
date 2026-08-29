@@ -97,7 +97,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
       // Gemini Liveは応答の音声が長くなると途中でDisconnectすることがあるため、ストリーミング再生の終了処理を行う。
       // ※Disconnectの原因究明までの暫定処置
-      if(p_this->speaking == true){
+      if(p_this->isSpeaking()){
         while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
         M5.Speaker.end();
         M5.Mic.begin();
@@ -107,7 +107,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         for(int i=0; i<2; i++){
             memset(p_this->audioBuf[i], 0, 100 * 1024);
         }
-        p_this->speaking = false;
+        p_this->setRealtimeSpeaking(false);
       }
 
 			break;
@@ -208,16 +208,16 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             }
 #ifndef REALTIME_API_WITH_TTS
             else if(!p_this->msgDoc["serverContent"]["modelTurn"]["parts"][0]["inlineData"]["data"].isNull()){
-                if(p_this->speaking == false){
+                if(!p_this->isSpeaking()){
                     Serial.printf("[WSc] input audio committed\n");
-                    p_this->stopRealtimeRecord();
+                    p_this->pauseRealtimeRecord(true);
 #ifndef REALTIME_API_WITH_TTS
                     enterMutexAudio();
                     M5.Mic.end();
                     M5.Speaker.begin();
-                    p_this->speaking = true;
+                    p_this->setRealtimeSpeaking(true);
 #else
-                    p_this->speaking = true;
+                    p_this->setRealtimeSpeaking(true);
 #endif
                 }
 
@@ -272,7 +272,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 for(int i=0; i<2; i++){
                     memset(p_this->audioBuf[i], 0, 100 * 1024);
                 }
-                p_this->speaking = false;
+                p_this->setRealtimeSpeaking(false);
 #else
                 p_this->response_done = true;
 #endif
@@ -295,7 +295,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 }
 
 
-GeminiLive::GeminiLive(llm_param_t param) : RealtimeLLMBase(param)
+GeminiLive::GeminiLive(llm_param_t param)
+  : RealtimeLLMBase(param, 16000, 2000, 16000)
 {
   p_this = this;    //コールバック関数に静的変数経由でthisポインタを渡す
   msgDoc = SpiRamJsonDocument(1024*150);
@@ -367,6 +368,12 @@ String& GeminiLive::buildInputAudioJson(String& jsonBuf, String& base64)
     jsonBuf.replace("REPLACE_TO_AUDIO_BASE64", base64);
     //Serial.println(jsonBuf);
     return jsonBuf;
+}
+
+void GeminiLive::audioAppendEnvelope(const char*& prefix, const char*& suffix)
+{
+    prefix = "{\"realtimeInput\":{\"audio\":{\"data\":\"";
+    suffix = "\",\"mime_type\":\"audio/pcm\"}}}";
 }
 
 #endif  //REALTIME_API

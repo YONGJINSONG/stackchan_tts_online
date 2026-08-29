@@ -17,12 +17,67 @@
 #include <base64.h>
 #include "libb64/cdecode.h"
 #include <WebSocketsClient.h>
+#include <esp_heap_caps.h>
 
 using namespace m5avatar;
 extern Avatar avatar;
 
-int16_t rtRecBuf[RT_REC_LENGTH];    // リアルタイム録音用メモリ
+int16_t rtRecBuf[RT_REC_BUFFER_SAMPLES];    // リアルタイム録音用メモリ
                                     // Core2だとヒープが不足するので静的な配列とした
+// Wire PCM after optional upsample (e.g. 16 kHz capture → 24 kHz session).
+static int16_t rtWireBuf[RT_REC_BUFFER_SAMPLES];
+
+// Reused PSRAM JSON buffer for audio append — avoids Arduino String / base64::encode
+// churn that fragments internal heap and drops CoreS3 TLS mid-listen.
+static char* rtAudioJsonBuf = nullptr;
+static const size_t RT_AUDIO_JSON_CAP = 12 * 1024;
+
+static bool ensureAudioJsonBuf() {
+    if (rtAudioJsonBuf) return true;
+    rtAudioJsonBuf = (char*)heap_caps_malloc(RT_AUDIO_JSON_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rtAudioJsonBuf) {
+        rtAudioJsonBuf = (char*)heap_caps_malloc(RT_AUDIO_JSON_CAP, MALLOC_CAP_8BIT);
+    }
+    if (!rtAudioJsonBuf) {
+        Serial.println("[realtime] audio JSON buffer alloc failed");
+        return false;
+    }
+    return true;
+}
+
+static size_t pcm16_to_base64(const uint8_t* src, size_t srcLen, char* dst, size_t dstCap) {
+    static const char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (dstCap < 1) return 0;
+    size_t o = 0;
+    for (size_t i = 0; i < srcLen; i += 3) {
+        if (o + 4 >= dstCap) return 0;
+        uint32_t n = ((uint32_t)src[i]) << 16;
+        if (i + 1 < srcLen) n |= ((uint32_t)src[i + 1]) << 8;
+        if (i + 2 < srcLen) n |= (uint32_t)src[i + 2];
+        dst[o++] = tbl[(n >> 18) & 63];
+        dst[o++] = tbl[(n >> 12) & 63];
+        dst[o++] = (i + 1 < srcLen) ? tbl[(n >> 6) & 63] : '=';
+        dst[o++] = (i + 2 < srcLen) ? tbl[n & 63] : '=';
+    }
+    dst[o] = '\0';
+    return o;
+}
+
+// Upsample 16 kHz → 24 kHz (3/2) with linear midpoints. inLen must be even;
+// outLen = inLen * 3 / 2 and must fit in RT_REC_BUFFER_SAMPLES.
+static int upsample_pcm16_16k_to_24k(const int16_t* in, int inLen, int16_t* out, int outCap) {
+    if (inLen < 2 || (inLen & 1) || (inLen * 3 / 2) > outCap) return 0;
+    int o = 0;
+    for (int i = 0; i < inLen; i += 2) {
+        const int16_t a = in[i];
+        const int16_t b = in[i + 1];
+        out[o++] = a;
+        out[o++] = (int16_t)(((int32_t)a + (int32_t)b) / 2);
+        out[o++] = b;
+    }
+    return o;
+}
 
 TaskHandle_t webSocketLoopTask_h = NULL;
 
@@ -39,14 +94,15 @@ void webSocketLoopTask(void *arg) {
 }
 
 
-RealtimeLLMBase::RealtimeLLMBase(llm_param_t param) : 
+RealtimeLLMBase::RealtimeLLMBase(llm_param_t param,
+                                 int captureSampleRate,
+                                 int captureSamples,
+                                 int wireSampleRate) :
     LLMBase(param, 0),
     msgDoc(0),
-    rtRecSamplerate(RT_REC_SAMPLE_RATE),
-    rtRecLength(RT_REC_LENGTH),
-    realtime_recording(false),
-    realtime_record_requested(false),
-    realtime_session_ready(false),
+    rtRecSamplerate(captureSampleRate),
+    rtWireSamplerate(wireSampleRate),
+    rtRecLength(captureSamples),
     response_done(false),
     startTime(0),
     nextBufIdx(0),
@@ -78,14 +134,21 @@ void RealtimeLLMBase::webSocketProcess()
     // its TLS client are not thread-safe.
     onWebSocketTick();
 
+    if (expireQueuedListen(millis())) {
+        Serial.printf("[realtime] queued listen expired after %ums\n",
+                      (unsigned)RT_LISTEN_QUEUE_TIMEOUT_MS);
+        avatar.setSpeechText("터치하면 시작");
+    }
+
 #ifdef REALTIME_API_WITH_TTS
-    if(response_done && !speaking){
+    if(response_done && !isSpeaking()){
         startRealtimeRecord();
         response_done = false;
     }
 #endif
 
-    if(realtime_recording){
+    RealtimeStateSnapshot state = getRealtimeStateSnapshot();
+    if(state.recording){
         enterMutexAudio();
         //M5.Mic.begin();
         if(!M5.Mic.record(rtRecBuf, rtRecLength, rtRecSamplerate)){
@@ -94,8 +157,34 @@ void RealtimeLLMBase::webSocketProcess()
         }
         //M5.Mic.end();
         exitMutexAudio();
-        String audio_base64;
-        audio_base64 = base64::encode((u8*)rtRecBuf, rtRecLength * sizeof(int16_t));
+
+        // A touch or disconnect may arrive while record() is blocked. Drop the
+        // captured chunk if it no longer belongs to an active, ready session.
+        state = getRealtimeStateSnapshot();
+        if (!state.recording || !state.sessionReady || state.speaking) {
+            delay(1);
+            return;
+        }
+        if (!webSocket.isConnected()) {
+            setRealtimeSessionReady(false);
+            delay(1);
+            return;
+        }
+        const int16_t* wirePcm = rtRecBuf;
+        int wireSamples = rtRecLength;
+        if (rtRecSamplerate == 16000 && rtWireSamplerate == 24000) {
+            wireSamples = upsample_pcm16_16k_to_24k(rtRecBuf, rtRecLength,
+                                                    rtWireBuf, RT_REC_BUFFER_SAMPLES);
+            if (wireSamples <= 0) {
+                Serial.println("[realtime] upsample 16k→24k failed");
+                delay(1);
+                return;
+            }
+            wirePcm = rtWireBuf;
+        } else if (rtRecSamplerate != rtWireSamplerate) {
+            Serial.printf("[realtime] unsupported rate pair capture=%d wire=%d\n",
+                          rtRecSamplerate, rtWireSamplerate);
+        }
 
 #ifdef REALTIME_API_RECORD_TEST
         if((recTestLenCnt + rtRecLength) < recTestLenMax){
@@ -103,25 +192,64 @@ void RealtimeLLMBase::webSocketProcess()
             recTestLenCnt += rtRecLength;
         }
 #else
-        String audioJsonBuf("");
-        String& audioJson = buildInputAudioJson(audioJsonBuf, audio_base64);
-        bool sent = webSocket.sendTXT(audioJson);
-        // Print one compact confirmation at the start of a turn (and then at
-        // most once every five seconds). This proves whether the disconnect is
-        // before or after the client hands an audio frame to the TLS socket.
+        if (!ensureAudioJsonBuf()) {
+            delay(1);
+            return;
+        }
+        const char* prefix = nullptr;
+        const char* suffix = nullptr;
+        audioAppendEnvelope(prefix, suffix);
+        if (!prefix || !suffix) {
+            Serial.println("[realtime] audio envelope missing");
+            delay(1);
+            return;
+        }
+        const size_t prefixLen = strlen(prefix);
+        const size_t suffixLen = strlen(suffix);
+        const size_t pcmBytes = (size_t)wireSamples * sizeof(int16_t);
+        if (prefixLen + suffixLen + 1 >= RT_AUDIO_JSON_CAP) {
+            Serial.println("[realtime] audio JSON cap too small");
+            delay(1);
+            return;
+        }
+        memcpy(rtAudioJsonBuf, prefix, prefixLen);
+        const size_t b64Len = pcm16_to_base64((const uint8_t*)wirePcm, pcmBytes,
+                                              rtAudioJsonBuf + prefixLen,
+                                              RT_AUDIO_JSON_CAP - prefixLen - suffixLen);
+        if (b64Len == 0) {
+            Serial.println("[realtime] base64 encode failed");
+            delay(1);
+            return;
+        }
+        memcpy(rtAudioJsonBuf + prefixLen + b64Len, suffix, suffixLen + 1);
+        const size_t jsonLen = prefixLen + b64Len + suffixLen;
+
+        // Let the WiFi/TLS task run after I2S capture before the next write.
+        for (int i = 0; i < 3; i++) {
+            webSocket.loop();
+            delay(1);
+        }
+        bool sent = sendTextChecked("audio_append", rtAudioJsonBuf, jsonLen);
+        webSocket.loop();
         static uint32_t lastAudioLogMs = 0;
         if (!sent || (millis() - lastAudioLogMs >= 5000)) {
-            Serial.printf("[realtime] audio append sent=%d pcm=%u json=%u rate=%d\n",
+            int32_t peak = 0;
+            for (int i = 0; i < rtRecLength; i++) {
+                int32_t v = rtRecBuf[i];
+                if (v < 0) v = -v;
+                if (v > peak) peak = v;
+            }
+            Serial.printf("[realtime] audio append sent=%d capture_rate=%d wire_rate=%d cap_samples=%d wire_samples=%d pcm=%u json=%u peak=%d largestI=%u\n",
                           (int)sent,
-                          (unsigned)(rtRecLength * sizeof(int16_t)),
-                          (unsigned)audioJson.length(),
-                          rtRecSamplerate);
+                          rtRecSamplerate,
+                          rtWireSamplerate,
+                          rtRecLength,
+                          wireSamples,
+                          (unsigned)pcmBytes,
+                          (unsigned)jsonLen,
+                          (int)peak,
+                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
             lastAudioLogMs = millis();
-        }
-        if (!sent) {
-            // Preserve the user's listening request so it resumes after the
-            // WebSocket library reconnects instead of silently dropping it.
-            setRealtimeSessionReady(false);
         }
 #endif
 
@@ -137,13 +265,14 @@ void RealtimeLLMBase::webSocketProcess()
         delay(1);
     }
     else{
-        if(speaking){
+        state = getRealtimeStateSnapshot();
+        if(state.speaking){
             //発話中もしくはテキスト生成中
             avatar.setSpeechText("");
             resetRealtimeRecordStartTime(); //長いテキストを発話中にタイムアウトしてしまうのを防ぐ
             delay(1);
         }
-        else if(realtime_record_requested && !realtime_session_ready){
+        else if(state.recordRequested && !state.sessionReady){
             avatar.setSpeechText("연결 중...");
             delay(10);
         }
@@ -161,61 +290,145 @@ int RealtimeLLMBase::getAudioLevel()
 
 void RealtimeLLMBase::startRealtimeRecord()
 {
-    realtime_record_requested = true;
-    if(!realtime_session_ready){
+    bool queued = false;
+    bool started = false;
+    const uint32_t nowMs = millis();
+    const portTickType nowTick = xTaskGetTickCount();
+    portENTER_CRITICAL(&realtimeStateMux);
+    RealtimeStateChange change = realtimeState.request(nowMs);
+    RealtimeStateSnapshot state = realtimeState.snapshot();
+    queued = !state.sessionReady && !state.speaking;
+    started = change.started;
+    if(started){
+        startTime = nowTick;
+    }
+    portEXIT_CRITICAL(&realtimeStateMux);
+
+    if(queued){
         Serial.println("[realtime] listen queued until session ready");
         avatar.setSpeechText("연결 중...");
         return;
     }
-    if(!realtime_recording){
+    if(started){
         Serial.println("Start realtime recording");
-        realtime_recording = true;
-        startTime = xTaskGetTickCount();
     }
 }
 
 void RealtimeLLMBase::stopRealtimeRecord()
 {
-    realtime_record_requested = false;
-    if(realtime_recording){
+    bool stopped;
+    portENTER_CRITICAL(&realtimeStateMux);
+    stopped = realtimeState.cancel().paused;
+    startTime = 0;
+    portEXIT_CRITICAL(&realtimeStateMux);
+    if(stopped){
         Serial.println("Stop realtime recording");
-        realtime_recording = false;
-        startTime = 0;
     }
+}
+
+void RealtimeLLMBase::pauseRealtimeRecord(bool preserveRequest)
+{
+    bool stopped;
+    const uint32_t nowMs = millis();
+    portENTER_CRITICAL(&realtimeStateMux);
+    stopped = realtimeState.pause(preserveRequest, nowMs).paused;
+    startTime = 0;
+    portEXIT_CRITICAL(&realtimeStateMux);
+    if (stopped) Serial.println("Stop realtime recording");
+}
+
+bool RealtimeLLMBase::sendTextChecked(const char* label, const String& payload)
+{
+    return sendTextChecked(label, payload.c_str(), payload.length());
+}
+
+bool RealtimeLLMBase::sendTextChecked(const char* label, const char* payload, size_t length)
+{
+    bool sent = webSocket.sendTXT(payload, length);
+    if (!sent) {
+        Serial.printf("[WSc] send failed label=%s\n", label ? label : "unknown");
+    }
+    return sent;
 }
 
 void RealtimeLLMBase::setRealtimeSessionReady(bool ready)
 {
-    realtime_session_ready = ready;
-
-    if(!ready){
-        // Audio append frames cannot survive a disconnected socket. Stop the
-        // capture loop immediately, but remember the user's listening intent so
-        // a later session.updated/setupComplete can resume it automatically.
-        if(realtime_recording){
-            realtime_recording = false;
-            realtime_record_requested = true;
-            startTime = 0;
-            Serial.println("[realtime] session lost — recording paused, resume queued");
-        }
-        return;
+    bool paused = false;
+    bool resumed = false;
+    const uint32_t nowMs = millis();
+    const portTickType nowTick = xTaskGetTickCount();
+    portENTER_CRITICAL(&realtimeStateMux);
+    RealtimeStateChange change = realtimeState.setSessionReady(ready, nowMs);
+    paused = change.paused;
+    resumed = change.started;
+    if (paused) startTime = 0;
+    if (resumed) {
+        startTime = nowTick;
     }
+    portEXIT_CRITICAL(&realtimeStateMux);
 
-    if(realtime_record_requested && !realtime_recording && !speaking){
+    if (paused) Serial.println("[realtime] session lost — recording paused, resume queued");
+    if (resumed) {
         Serial.println("[realtime] session ready — starting queued listen");
-        startRealtimeRecord();
+        Serial.println("Start realtime recording");
     }
+}
+
+void RealtimeLLMBase::setRealtimeSpeaking(bool value, bool resumeListening)
+{
+    bool resumed = false;
+    const portTickType nowTick = xTaskGetTickCount();
+    portENTER_CRITICAL(&realtimeStateMux);
+    RealtimeStateChange change = realtimeState.setSpeaking(value, resumeListening);
+    speaking = value;
+    if (value) {
+        startTime = 0;
+    } else if (change.started) {
+        startTime = nowTick;
+        resumed = true;
+    }
+    portEXIT_CRITICAL(&realtimeStateMux);
+    if (resumed) Serial.println("Start realtime recording");
+}
+
+bool RealtimeLLMBase::expireQueuedListen(uint32_t nowMs)
+{
+    bool expired = false;
+    portENTER_CRITICAL(&realtimeStateMux);
+    expired = realtimeState.expire(nowMs, RT_LISTEN_QUEUE_TIMEOUT_MS);
+    if (expired) {
+        startTime = 0;
+    }
+    portEXIT_CRITICAL(&realtimeStateMux);
+    return expired;
+}
+
+RealtimeStateSnapshot RealtimeLLMBase::getRealtimeStateSnapshot()
+{
+    portENTER_CRITICAL(&realtimeStateMux);
+    RealtimeStateSnapshot snapshot = realtimeState.snapshot();
+    portEXIT_CRITICAL(&realtimeStateMux);
+    return snapshot;
 }
 
 void RealtimeLLMBase::resetRealtimeRecordStartTime()
 {
-    startTime = xTaskGetTickCount();
+    const portTickType nowTick = xTaskGetTickCount();
+    portENTER_CRITICAL(&realtimeStateMux);
+    startTime = nowTick;
+    portEXIT_CRITICAL(&realtimeStateMux);
 }
 
 portTickType RealtimeLLMBase::checkRealtimeRecordTimeout()
 {
-    portTickType elapsedTime;
-    elapsedTime = (xTaskGetTickCount() - startTime) * portTICK_RATE_MS;
+    const portTickType nowTick = xTaskGetTickCount();
+    portTickType recordStart;
+    portENTER_CRITICAL(&realtimeStateMux);
+    recordStart = startTime;
+    portEXIT_CRITICAL(&realtimeStateMux);
+    portTickType elapsedTime = recordStart == 0
+        ? 0
+        : (nowTick - recordStart) * portTICK_RATE_MS;
     if(elapsedTime > REALTIME_RECORD_TIMEOUT){
         Serial.println("Realtime recording timeout");
         stopRealtimeRecord();

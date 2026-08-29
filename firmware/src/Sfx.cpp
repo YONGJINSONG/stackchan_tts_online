@@ -87,7 +87,7 @@ bool sfx_play_file(const char* file) {
   if (robot == nullptr || robot->llm == nullptr || mutexAudio == NULL) return false;
 
 #if defined(REALTIME_API)
-  if (robot->llm->speaking) { diag_log("[sfx] skip: speaking (file=%s)", file); return false; }   // never cut off active speech
+  if (robot->llm->isSpeaking()) { diag_log("[sfx] skip: speaking (file=%s)", file); return false; }   // never cut off active speech
   RealtimeLLMBase* rt = (RealtimeLLMBase*)robot->llm;
 #endif
 
@@ -166,7 +166,7 @@ void sfx_pump() {
   if (!g_pendingFile.length()) return;
   if (millis() - g_pendingMs > 10000) { diag_log("[sfx] pump giveup(10s) %s", g_pendingFile.c_str()); g_pendingFile = String(); g_pendingMotion = String(); g_pendingMotionFired = false; return; }
 #if defined(REALTIME_API)
-  if (robot && robot->llm && robot->llm->speaking) return;   // 발화 끝날 때까지 대기
+  if (robot && robot->llm && robot->llm->isSpeaking()) return;   // 발화 끝날 때까지 대기
 #endif
   // 함께 재생할 모션은 한 번만 발사(사운드 재시도에 중복 발사 안 되게).
   if (!g_pendingMotionFired && g_pendingMotion.length()) { motion_play(g_pendingMotion); g_pendingMotionFired = true; }

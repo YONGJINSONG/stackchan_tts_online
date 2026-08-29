@@ -9,16 +9,17 @@
 #include "SpiRamJsonDocument.h"
 #include "ChatHistory.h"
 #include "LLMBase.h"
+#include "RealtimeListenState.h"
 #include <WebSocketsClient.h>
 
 //#define REALTIME_API_RECORD_TEST
 
 #define GEMINI_PROMPT_MAX_SIZE   (1024*50)
 
-#define RT_REC_LENGTH       (2000)      // 16 kHz PCM: 125 ms per chunk
-// CoreS3's known-working microphone capture rate. The Realtime session keeps
-// its existing 24 kHz contract for compatibility with the previous build.
-#define RT_REC_SAMPLE_RATE  (16000)
+#define RT_REC_BUFFER_SAMPLES       (3000)
+#define RT_REC_DEFAULT_LENGTH       (2000)      // 16 kHz PCM: 125 ms per chunk
+#define RT_REC_DEFAULT_SAMPLE_RATE  (16000)
+#define RT_LISTEN_QUEUE_TIMEOUT_MS  (60 * 1000)
 
 #ifdef REALTIME_API_RECORD_TEST
 #define REALTIME_RECORD_TIMEOUT     (4 * 1000)      //ms  ※録音テスト再生用バッファのサイズに合わせる
@@ -39,13 +40,16 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     //
     //int16_t* rtRecBuf;
     int rtRecSamplerate;
+    int rtWireSamplerate;
     int rtRecLength;
-    bool realtime_recording;
-    volatile bool realtime_record_requested;
-    volatile bool realtime_session_ready;
     bool response_done;
     portTickType startTime;
 
+private:
+    portMUX_TYPE realtimeStateMux = portMUX_INITIALIZER_UNLOCKED;
+    RealtimeListenState realtimeState;
+
+public:
 #ifdef REALTIME_API_RECORD_TEST
     int16_t* recTestBuf;
     int recTestLenMax;
@@ -58,10 +62,16 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     int nextBufIdx;          // 次回データを格納するダブルバッファの面（0 or 1）
 
 public:
-    RealtimeLLMBase(llm_param_t param);
+    RealtimeLLMBase(llm_param_t param,
+                    int captureSampleRate = RT_REC_DEFAULT_SAMPLE_RATE,
+                    int captureSamples = RT_REC_DEFAULT_LENGTH,
+                    int wireSampleRate = RT_REC_DEFAULT_SAMPLE_RATE);
 
     virtual void chat(String text, const char *base64_buf = NULL) {};   //dummy
     virtual String& buildInputAudioJson(String& jsonBuf, String& base64) = 0;
+    virtual void audioAppendEnvelope(const char*& prefix, const char*& suffix) = 0;
+    virtual bool sendTextChecked(const char* label, const String& payload);
+    virtual bool sendTextChecked(const char* label, const char* payload, size_t length);
 
     // Inject a proactive user-role message and trigger a response. Used for
     // scheduled greetings (midnight bedtime, weekday morning briefings).
@@ -83,12 +93,17 @@ public:
     int getAudioLevel();
     void startRealtimeRecord();
     void stopRealtimeRecord();
+    void pauseRealtimeRecord(bool preserveRequest = true);
     void setRealtimeSessionReady(bool ready);
+    void setRealtimeSpeaking(bool value, bool resumeListening = true);
+    bool expireQueuedListen(uint32_t nowMs);
+    RealtimeStateSnapshot getRealtimeStateSnapshot();
     void resetRealtimeRecordStartTime();
     portTickType checkRealtimeRecordTimeout();
-    bool isRealtimeRecording() {return realtime_recording;};
-    bool isRealtimeRecordRequested() {return realtime_record_requested;};
-    bool isRealtimeSessionReady() {return realtime_session_ready;};
+    bool isRealtimeRecording() {return getRealtimeStateSnapshot().recording;};
+    bool isRealtimeRecordRequested() {return getRealtimeStateSnapshot().recordRequested;};
+    bool isRealtimeSessionReady() {return getRealtimeStateSnapshot().sessionReady;};
+    bool isSpeaking() override {return getRealtimeStateSnapshot().speaking;};
 
     int base64_decode(const char* input, int size, char* output);
     void hexdump(const void *mem, uint32_t len, uint8_t cols = 16);
