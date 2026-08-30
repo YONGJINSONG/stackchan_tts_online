@@ -131,6 +131,11 @@ int ServoCustom::currentPinY() const {
 }
 
 
+ServoType ServoCustom::servoType() const {
+  return _servo_type;
+}
+
+
 // -----------------------------------------------------------------------------
 // Fast direct movement
 // -----------------------------------------------------------------------------

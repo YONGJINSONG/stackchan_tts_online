@@ -10,4 +10,8 @@ void gesture_init();
 void gesture_play(m5avatar::Expression e);
 bool gesture_dance();
 
+// Hold the head at a stable pose for camera/tutor operations.
+void gesture_set_motion_hold(bool hold, bool center = false);
+bool gesture_motion_held();
+
 #endif  //_GESTURE_H

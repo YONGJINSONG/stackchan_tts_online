@@ -19,8 +19,11 @@ extern int preallocateBufferSize;
 extern uint8_t *preallocateBuffer;
 
 extern void mp3_init(void);
-extern void playMP3(AudioFileSourceBuffer *buff);
+extern bool playMP3(AudioFileSourceBuffer *buff, uint32_t maxPlayMs = 30000);
 extern bool playMP3SPIFFS(const char *filename);
 extern bool playMP3SD(const char *filename);
+extern void playMP3_request_stop();
+extern bool playMP3_is_running();
+extern bool playMP3_was_stopped();
 
 #endif

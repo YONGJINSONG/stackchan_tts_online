@@ -52,12 +52,16 @@ Robot::Robot(StackchanExConfig& config) : m_config(config)
   servo = new ServoCustom();
   int pinX = config.getServoInfo(AXIS_X)->pin;
   int pinY = config.getServoInfo(AXIS_Y)->pin;
+  ServoType servoType = (ServoType)config.getServoType();
 #if defined(ARDUINO_M5STACK_CORES3)
-  bool remap = (pinX == 32 || pinX == 33 || pinY == 32 || pinY == 33
-                || pinX < 1 || pinX > 48 || pinY < 1 || pinY > 48);
+  bool remap = servoType == ServoType::PWM
+               && (pinX == 32 || pinX == 33 || pinY == 32 || pinY == 33
+                   || pinX < 1 || pinX > 48 || pinY < 1 || pinY > 48);
 #if defined(ENABLE_CAMERA)
-  // Camera XCLK owns GPIO2. Yaml 1/2 (Port A) cannot drive the head.
-  if (pinY == 2 || (pinX == 1 && pinY == 2)) remap = true;
+  // Preserve the existing camera-build PWM profile on Port C. Serial servo
+  // RX/TX pins must never be remapped as if they were PWM outputs.
+  if (servoType == ServoType::PWM
+      && (pinY == 2 || (pinX == 1 && pinY == 2))) remap = true;
 #endif
   if (remap) {
     Serial.printf("[servo] WARNING: SD pins x=%d y=%d remapped to GPIO %d/%d\n",
@@ -66,12 +70,14 @@ Robot::Robot(StackchanExConfig& config) : m_config(config)
     pinY = DEFAULT_SERVO_PIN_Y;
   }
 #endif
-  Serial.printf("[servo] begin PWM on pinX=%d pinY=%d\n", pinX, pinY);
+  Serial.printf("[servo] begin type=%d pinX=%d pinY=%d\n",
+                (int)servoType, pinX, pinY);
   servo->begin(pinX, config.getServoInfo(AXIS_X)->start_degree,
               config.getServoInfo(AXIS_X)->offset,
               pinY, config.getServoInfo(AXIS_Y)->start_degree,
               config.getServoInfo(AXIS_Y)->offset,
-              (ServoType)config.getServoType());
+              servoType,
+              servoType == ServoType::M5_SCS ? &M5.In_I2C : nullptr);
 #endif
 
   // TakaoBase setting 

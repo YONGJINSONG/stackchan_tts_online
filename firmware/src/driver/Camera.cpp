@@ -15,7 +15,6 @@
 #include "Robot.h"
 #include "CameraVision.h"
 #include "CameraDmaConfig.h"
-#include "cam_hal.h"
 #include "yuv.h"
 #include "Gesture.h"
 #include "llm/ChatGPT/FunctionCall.h"
@@ -24,7 +23,6 @@
 #endif
 #include "driver/gpio.h"
 
-extern "C" int Cache_Invalidate_Addr(uint32_t addr, uint32_t size);
 using namespace m5avatar;
 extern Avatar avatar;
 namespace m5avatar {
@@ -39,10 +37,12 @@ bool isSilentMode = false;
 static camera_config_t camera_config = {
     .pin_pwdn     = -1,
     .pin_reset    = -1,
-    // LCD_CAM drives 20 MHz on GPIO2. SCCB can ACK without it; PCLK cannot.
-    .pin_xclk     = 2,
-    .pin_sscb_sda = 12,
-    .pin_sscb_scl = 11,
+    // Official CoreS3: sensor XCLK is not an ESP GPIO (board clock).
+    .pin_xclk     = -1,
+    // sda=-1 selects SCCB_Use_Port(sccb_i2c_port). Do not SCCB_Init a
+    // second driver on 11/12 — that races CoreS3 In_I2C (I2C_NUM_1).
+    .pin_sscb_sda = -1,
+    .pin_sscb_scl = -1,
 
     .pin_d7 = 47,
     .pin_d6 = 48,
@@ -71,7 +71,7 @@ static camera_config_t camera_config = {
     .fb_count     = 1,
     .fb_location  = CAMERA_FB_IN_PSRAM,
     .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
-    .sccb_i2c_port = -1,
+    .sccb_i2c_port = 1,
 };
 
 static bool camera_session_open = false;
@@ -119,28 +119,12 @@ static bool camera_ensure_preview_buf() {
     return true;
 }
 
-// DMA writes PSRAM behind the DCache. Invalidate only cache lines fully
-// inside the frame so we never drop dirty Wi-Fi/sprite lines (outward
-// rounding Guru-Meditation'd CoreS3). Do not WriteBack first: that would
-// flush stale cache over the DMA pixels.
-static void camera_invalidate_dma_fb(const camera_fb_t* fb) {
-    if (!fb || !fb->buf || fb->len == 0) return;
-    if (!esp_ptr_external_ram(fb->buf)) return;
-    const uintptr_t line = 32;
-    uintptr_t start = (uintptr_t)fb->buf;
-    uintptr_t end = start + fb->len;
-    uintptr_t a = (start + line - 1) & ~(line - 1);
-    uintptr_t b = end & ~(line - 1);
-    if (b <= a) return;
-    int rc = Cache_Invalidate_Addr((uint32_t)a, (uint32_t)(b - a));
-    if (rc != 0) {
-        Serial.printf("[camera] cache invalidate failed rc=%d addr=0x%08x len=%u\n",
-                      rc, (unsigned)a, (unsigned)(b - a));
-    }
-}
-
-static uint16_t camera_rgb888_to_565(uint8_t r, uint8_t g, uint8_t b) {
-    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+// Keep s_preview_rgb in the same byte layout as a GC0308 RGB565_BE frame:
+// [high byte, low byte] in memory. On little-endian ESP32 this means the
+// uint16_t storage value itself is byte-swapped.
+static uint16_t camera_rgb888_to_565_be_storage(uint8_t r, uint8_t g, uint8_t b) {
+    uint16_t v = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    return (uint16_t)((v << 8) | (v >> 8));
 }
 
 // GC0308 default 0x24=0xa2 is YCbYCr (Y0 U Y1 V). Displayed as RGB565 that
@@ -155,9 +139,9 @@ static void camera_yuyv_to_rgb565(const uint8_t* src, uint16_t* dst, int w, int 
         src += 4;
         uint8_t r, g, b;
         yuv2rgb(y0, u, v, &r, &g, &b);
-        *dst++ = camera_rgb888_to_565(r, g, b);
+        *dst++ = camera_rgb888_to_565_be_storage(r, g, b);
         yuv2rgb(y1, u, v, &r, &g, &b);
-        *dst++ = camera_rgb888_to_565(r, g, b);
+        *dst++ = camera_rgb888_to_565_be_storage(r, g, b);
     }
 }
 
@@ -195,7 +179,6 @@ static void camera_store_preview_rgb(camera_fb_t* fb) {
     int w = fb->width > 320 ? 320 : (int)fb->width;
     int h = fb->height > 240 ? 240 : (int)fb->height;
     if ((w & 1) != 0) w &= ~1;
-    camera_invalidate_dma_fb(fb);
     Serial.printf("[camera] fb head %02x %02x %02x %02x %02x %02x %02x %02x\n",
                   fb->buf[0], fb->buf[1], fb->buf[2], fb->buf[3],
                   fb->buf[4], fb->buf[5], fb->buf[6], fb->buf[7]);
@@ -210,64 +193,42 @@ static void camera_store_preview_rgb(camera_fb_t* fb) {
 
 bool camera_push_preview_rgb565(void) {
     if (s_preview_rgb == nullptr || s_preview_w <= 0 || s_preview_h <= 0) return false;
-    M5.Display.setSwapBytes(true);
-    M5.Display.pushImage(0, 0, s_preview_w, s_preview_h, s_preview_rgb);
+    // GC0308 RGB565_BE bytes already match M5GFX's swap565_t memory layout.
+    // setSwapBytes(true) instead treats them as native rgb565_t and swaps the
+    // red/green/blue bit fields, which only corrupts the on-device preview.
+    bool oldSwap = M5.Display.getSwapBytes();
     M5.Display.setSwapBytes(false);
+    M5.Display.pushImage(0, 0, s_preview_w, s_preview_h, s_preview_rgb);
+    M5.Display.setSwapBytes(oldSwap);
     return true;
 }
 
 static void camera_release_xclk_pin(void) {
-    // GPIO2 is LCD_CAM XCLK during capture. Drop the mux so Port A is idle.
-    ledcDetachPin(2);
-    gpio_reset_pin(GPIO_NUM_2);
-    Serial.println("[camera] LCD_CAM XCLK released on GPIO2");
+    if (camera_config.pin_xclk < 0) return;
+    ledcDetachPin(camera_config.pin_xclk);
+    gpio_reset_pin((gpio_num_t)camera_config.pin_xclk);
+    Serial.printf("[camera] XCLK GPIO%d released\n", camera_config.pin_xclk);
 }
 
 // AW9523 P1_0 is GC0308 CAM_RST (active low). Pulse while In_I2C is still up.
-static void camera_pulse_gc0308_reset(void) {
+// Other CoreS3 services share this bus, so tolerate a transient failed RMW and
+// never probe the sensor while reset is still asserted.
+static bool camera_pulse_gc0308_reset(void) {
     static constexpr uint8_t kAw9523 = 0x58;
     static constexpr uint8_t kP1Out = 0x03;
     static constexpr uint8_t kCamRst = 1u << 0;
     bool lo = M5.In_I2C.bitOff(kAw9523, kP1Out, kCamRst, 400000);
     delay(10);
-    bool hi = M5.In_I2C.bitOn(kAw9523, kP1Out, kCamRst, 400000);
+    bool hi = false;
+    int high_attempts = 0;
+    for (; high_attempts < 5 && !hi; ++high_attempts) {
+        hi = M5.In_I2C.bitOn(kAw9523, kP1Out, kCamRst, 400000);
+        if (!hi) delay(10);
+    }
     delay(20);
-    Serial.printf("[camera] AW9523 CAM_RST pulse lo=%d hi=%d\n", lo ? 1 : 0, hi ? 1 : 0);
-}
-
-// cam_take() is the HAL queue pop used so we can retry on EOF-OVF.
-// Width/height/format are filled by esp_camera_fb_get(), not by cam_take().
-// Without this stamp, frame2jpg sees 0x0 and logs "JPG encoder init failed".
-static void camera_stamp_fb(camera_fb_t* fb) {
-    if (!fb) return;
-    switch (camera_config.frame_size) {
-        case FRAMESIZE_VGA:
-            fb->width = 640;
-            fb->height = 480;
-            break;
-        case FRAMESIZE_QVGA:
-        default:
-            fb->width = 320;
-            fb->height = 240;
-            break;
-    }
-    fb->format = camera_config.pixel_format;
-}
-
-static camera_fb_t* camera_take_frame(uint32_t timeout_ms, int tries) {
-    camera_fb_t* fb = nullptr;
-    for (int i = 0; i < tries; i++) {
-        fb = cam_take(pdMS_TO_TICKS(timeout_ms));
-        if (fb) {
-            camera_stamp_fb(fb);
-            return fb;
-        }
-        Serial.printf("[camera] frame try %d missed\n", i);
-        cam_stop();
-        delay(40);
-        cam_start();
-    }
-    return nullptr;
+    Serial.printf("[camera] AW9523 CAM_RST pulse lo=%d hi=%d high_attempts=%d\n",
+                  lo ? 1 : 0, hi ? 1 : 0, high_attempts);
+    return hi;
 }
 
 static void camera_log_dma_heap(const char* stage) {
@@ -276,6 +237,79 @@ static void camera_log_dma_heap(const char* stage) {
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
                   (unsigned)CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX);
+}
+
+static esp_err_t camera_driver_initialize(int attempts) {
+    camera_config.sccb_i2c_port = M5.In_I2C.getPort();
+    esp_err_t last_err = ESP_FAIL;
+
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (!camera_pulse_gc0308_reset()) {
+            last_err = ESP_ERR_TIMEOUT;
+            Serial.printf("[camera] reset release failed; skipping init attempt %d/%d\n",
+                          attempt + 1, attempts);
+            delay(80);
+            continue;
+        }
+        Serial.printf("[camera] using existing In_I2C port=%d init attempt=%d/%d\n",
+                      camera_config.sccb_i2c_port, attempt + 1, attempts);
+        camera_log_dma_heap("before init");
+
+        last_err = esp_camera_init(&camera_config);
+        if (last_err != ESP_OK) {
+            Serial.printf("[camera] init attempt %d failed: 0x%x\n",
+                          attempt + 1, (unsigned)last_err);
+            delay(80);
+            continue;
+        }
+
+        bool warmup_ok = true;
+        for (int i = 0; i < 2; ++i) {
+            camera_fb_t* warm = esp_camera_fb_get();
+            if (!warm) {
+                Serial.printf("[camera] warmup frame %d missed\n", i);
+                warmup_ok = false;
+                last_err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            Serial.printf("[camera] warmup frame %d ok: %ux%u %u bytes\n",
+                          i, (unsigned)warm->width, (unsigned)warm->height,
+                          (unsigned)warm->len);
+            esp_camera_fb_return(warm);
+        }
+
+        if (warmup_ok) return ESP_OK;
+
+        esp_camera_deinit();
+        delay(80);
+        Serial.println("[camera] driver fully deinitialized before retry");
+    }
+
+    return last_err;
+}
+
+static bool camera_reinitialize_driver_once() {
+    if (camera_session_open) {
+        esp_camera_deinit();
+        camera_session_open = false;
+        delay(80);
+    }
+
+    esp_err_t err = camera_driver_initialize(1);
+    camera_session_open = (err == ESP_OK);
+    if (!camera_session_open) {
+        Serial.printf("[camera] driver recovery failed: 0x%x\n", (unsigned)err);
+    }
+    return camera_session_open;
+}
+
+static camera_fb_t* camera_get_frame_with_recovery() {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb) return fb;
+
+    Serial.println("[camera] frame missed; performing one full driver recovery");
+    if (!camera_reinitialize_driver_once()) return nullptr;
+    return esp_camera_fb_get();
 }
 
 static esp_err_t camera_session_begin(void){
@@ -304,29 +338,28 @@ static esp_err_t camera_session_begin(void){
     enterMutexAudio();
     camera_audio_held = true;
     while (M5.Speaker.isPlaying()) delay(2);
-    if (M5.Mic.isEnabled()) M5.Mic.end();
-    if (M5.Speaker.isEnabled()) M5.Speaker.end();
+    if (M5.Mic.isRunning()) M5.Mic.end();
+    if (M5.Speaker.isRunning()) M5.Speaker.end();
     delay(20);
     camera_pause_websocket();
-    if (robot && robot->servo) {
+    if (robot && robot->servo
+        && robot->servo->servoType() == ServoType::PWM) {
         uint32_t waitStart = millis();
         while (robot->servo->isMoving() && millis() - waitStart < 5000) delay(10);
         if (robot->servo->isMoving()) {
             Serial.println("[camera] servo wait timeout; suspending PWM");
         }
         camera_servo_suspended = robot->servo->suspendPwmForCamera();
+    } else if (robot && robot->servo
+               && robot->servo->servoType() == ServoType::M5_SCS) {
+        Serial.println("[camera] M5_SCS remains on PY32/Serial2; no PWM GPIO detach");
     }
 
-    //initialize the camera
-    // Do not gpio_reset 11/12: that glitches AW9523 (LCD/CAM_RST) on the same bus.
-    camera_pulse_gc0308_reset();
-    M5.In_I2C.release();
-    delay(20);
-    Serial.println("[camera] In_I2C released; initializing GC0308 (LCD_CAM XCLK GPIO2)");
-    camera_log_dma_heap("before init");
-    esp_err_t err = esp_camera_init(&camera_config);
+    // CoreS3 camera SCCB and PY32 share the already initialized internal bus.
+    // The camera driver borrows that port and therefore must not release,
+    // install, or later re-begin it.
+    esp_err_t err = camera_driver_initialize(2);
     if (err != ESP_OK) {
-        M5.In_I2C.begin();
         camera_release_xclk_pin();
         if (camera_servo_suspended && robot && robot->servo) robot->servo->resumePwmAfterCamera();
         camera_servo_suspended = false;
@@ -337,39 +370,10 @@ static esp_err_t camera_session_begin(void){
             camera_audio_held = false;
         }
         camera_resume_websocket();
-        Serial.printf("[camera] init failed: 0x%x (I2C restored)\n", (unsigned)err);
+        Serial.printf("[camera] init failed after recovery: 0x%x\n", (unsigned)err);
         camera_log_dma_heap("after init failure");
         M5.Display.println("Camera Init Failed");
         return err;
-    }
-
-    // Do not cam_stop() here. That halted GDMA while cam_task stayed in
-    // READ_BUF, so later cam_start() only re-enabled VSYNC IRQ and no
-    // frame ever completed (timeouts, no EV-EOF-OVF).
-    sensor_t *s = esp_camera_sensor_get();
-    s->set_hmirror(s, 0);
-
-    // 20 MHz XCLK with PCLK /4 (~5 MHz). Write while the stream is live.
-    s->set_reg(s, 0xfe, 0xff, 0x00);
-    int pclkResult = s->set_reg(s, 0x28, 0x77, 0x32);
-    int pclkConfig = s->get_reg(s, 0x28, 0x77);
-    int pixRes = s->set_pixformat(s, PIXFORMAT_RGB565);
-    int fsRes = s->set_framesize(s, camera_config.frame_size);
-    s->set_reg(s, 0xfe, 0xff, 0x00);
-    int pixReg = s->get_reg(s, 0x24, 0xff);
-    Serial.printf("[camera] GC0308 PCLK /4 set: result=%d reg=0x%02x pix=%d fs=%d 0x24=0x%02x\n",
-                  pclkResult, pclkConfig, pixRes, fsRes, pixReg);
-    delay(200);
-    Serial.println("[camera] stream left running after init");
-    for (int i = 0; i < 3; i++) {
-        camera_fb_t *warm = cam_take(pdMS_TO_TICKS(1500));
-        if (!warm) {
-            Serial.printf("[camera] warmup frame %d missed\n", i);
-            continue;
-        }
-        camera_stamp_fb(warm);
-        cam_give(warm);
-        Serial.printf("[camera] warmup frame %d ok\n", i);
     }
 
     camera_session_open = true;
@@ -386,7 +390,6 @@ static void camera_session_end(void) {
         camera_session_open = false;
     }
     camera_release_xclk_pin();
-    bool restored = M5.In_I2C.begin();
     if (camera_servo_suspended && robot && robot->servo) robot->servo->resumePwmAfterCamera();
     camera_servo_suspended = false;
     camera_set_hardware_busy(false);
@@ -396,7 +399,8 @@ static void camera_session_end(void) {
         camera_audio_held = false;
     }
     camera_resume_websocket();
-    Serial.printf("[camera] session closed, internal I2C restored=%d\n", restored ? 1 : 0);
+    Serial.printf("[camera] session closed, borrowed In_I2C port=%d preserved\n",
+                  camera_config.sccb_i2c_port);
     camera_log_dma_heap("after deinit");
 }
 
@@ -473,7 +477,7 @@ bool camera_capture_and_face_detect(void){
   if (camera_session_begin() != ESP_OK) return false;
 
   //acquire a frame
-  camera_fb_t *fb = esp_camera_fb_get();
+  camera_fb_t *fb = camera_get_frame_with_recovery();
   if (!fb) {
     //Serial.println("Camera Capture Failed");
     M5.Display.println("Camera Capture Failed");
@@ -536,7 +540,7 @@ bool camera_capture_base64(String& out)
 {
   if (camera_session_begin() != ESP_OK) return false;
   //acquire a frame
-  camera_fb_t *fb = esp_camera_fb_get();
+  camera_fb_t *fb = camera_get_frame_with_recovery();
 
   if (!fb) {
     Serial.println("Camera Capture Failed");
@@ -599,8 +603,8 @@ static void put_le32(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
-// LCD preview uses setSwapBytes(true). Apply the same 16-bit swap so the
-// BMP on disk matches what the panel shows.
+// s_preview_rgb stores GC0308 RGB565_BE bytes. Reassemble the native RGB565
+// value before expanding it to the BMP's BGR888 byte order.
 static void rgb565_to_bgr(uint16_t p, uint8_t& b, uint8_t& g, uint8_t& r) {
     uint16_t v = (uint16_t)((p << 8) | (p >> 8));
     r = (uint8_t)(((v >> 11) & 0x1F) << 3);
@@ -684,7 +688,7 @@ bool camera_capture_save_to(const char* destPath, String& outPath)
   if (!camera_ensure_preview_buf()) return false;
   if (camera_session_begin() != ESP_OK) return false;
   Serial.println("[camera] waiting for frame");
-  camera_fb_t *fb = camera_take_frame(2000, 3);
+  camera_fb_t *fb = camera_get_frame_with_recovery();
   if (!fb) {
     Serial.println("[camera] frame capture failed");
     camera_session_end();

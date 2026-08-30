@@ -10,6 +10,7 @@
 
 #include "share/SdBus.h"
 #include "llm/ChatGPT/FunctionCall.h"
+#include "Gesture.h"
 
 #if defined(ENABLE_CAMERA)
 #include "driver/Camera.h"
@@ -891,6 +892,10 @@ bool camera_action_request_save() {
 
     unlock_action();
 
+    // Hold from the start of the countdown so expression function calls and
+    // gaze/remote tasks cannot move the head before the shutter fires.
+    gesture_set_motion_hold(true, true);
+
     show_countdown_digit(3);
 
     Serial.println(
@@ -1035,6 +1040,8 @@ void camera_action_on_touch(
 
             finish_preview_ui();
 
+            if (abandoned) gesture_set_motion_hold(false);
+
             Serial.println(
                 "[camera-action] permanent save failed"
             );
@@ -1083,6 +1090,8 @@ void camera_action_on_touch(
 
         finish_preview_ui();
 
+        if (abandoned) gesture_set_motion_hold(false);
+
         Serial.println(
             "[camera-action] save completed"
         );
@@ -1127,6 +1136,8 @@ void camera_action_on_touch(
     unlock_action();
 
     finish_preview_ui();
+
+    if (abandoned) gesture_set_motion_hold(false);
 
     Serial.println(
         "[camera-action] preview discarded"
@@ -1265,6 +1276,8 @@ void camera_action_process_pending() {
 
         finish_preview_ui();
 
+        gesture_set_motion_hold(false);
+
         Serial.println(
             "[camera-action] capture abandoned"
         );
@@ -1291,6 +1304,8 @@ void camera_action_process_pending() {
         unlock_action();
 
         finish_preview_ui();
+
+        gesture_set_motion_hold(false);
 
         Serial.println(
             "[camera-action] capture failed"
@@ -1350,6 +1365,8 @@ void camera_action_process_pending() {
         );
 
         finish_preview_ui();
+
+        gesture_set_motion_hold(false);
 
         Serial.println(
             "[camera-action] preview abandoned"
@@ -1416,6 +1433,8 @@ bool camera_action_take_result(
     s_countdownNextMs = 0;
 
     unlock_action();
+
+    gesture_set_motion_hold(false);
 
     Serial.println(
         "[camera-action] result consumed"
@@ -1518,6 +1537,8 @@ void camera_action_abandon() {
     s_saved = false;
 
     unlock_action();
+
+    gesture_set_motion_hold(false);
 
 
     // ========================================================

@@ -21,6 +21,7 @@
 #include "NightMode.h"
 #include "CameraVision.h"
 #include "CameraAction.h"
+#include "MusicAction.h"
 #include "Proximity.h"
 #include "WifiConfig.h"
 #include "WifiSetupPortal.h"
@@ -158,6 +159,15 @@ void servo(void *args)
   for (;;)
   {
 #ifdef USE_SERVO
+    // Camera countdown/capture and an active Kids Tutor question require a
+    // stable origin pose. This hold overrides web and ESP-NOW head input.
+    if (gesture_motion_held())
+    {
+      prevTgtX = prevTgtY = 999;
+      delay(50);
+      continue;
+    }
+
     // 웹 조이스틱 수동 제어 — 최우선. 다른 소스(idle/제스처/시선/홈/espnow) 무시하고 즉시 추종.
     if(millis() < g_servoManualUntil)
     {
@@ -849,6 +859,7 @@ void loop()
   checkUsageTimer();
   kids_tutor_process_pending();  // defer Realtime function-call UI/SD work to this task
   camera_action_process_pending();
+  music_action_process_pending();
 
   ModBase* mod = get_current_mod();
   mod->idle();
@@ -898,6 +909,13 @@ void loop()
     else if (camera_action_is_ui_active())
     {
       if (t.wasReleased()) camera_action_on_touch(t.x, t.y);
+    }
+    else if (music_action_is_playing())
+    {
+      if (t.wasReleased()) {
+        Serial.println("[music] stop by touch");
+        music_action_stop();
+      }
     }
     else if (t.wasFlicked())
     {

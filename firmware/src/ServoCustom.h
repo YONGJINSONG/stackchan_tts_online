@@ -38,6 +38,9 @@ public:
     int currentPinX() const;
     int currentPinY() const;
 
+    // Active backend selected from SC_BasicConfig.yaml.
+    ServoType servoType() const;
+
     // Easing 없이 빠르게 상대 위치 이동
     void writeOffset(int degX, int degY);
 

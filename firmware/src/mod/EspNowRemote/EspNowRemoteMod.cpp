@@ -149,49 +149,63 @@ void EspNowRemoteMod::init(void)
   // Probe A / B / C with hard 0↔180 writes (bypasses easing).
 #ifdef USE_SERVO
   if (robot && robot->servo) {
-    int homeX = robot->servo->currentPinX();
-    int homeY = robot->servo->currentPinY();
+    const ServoType servoType = robot->servo->servoType();
+    Serial.printf("[EspNowRemote] servo backend type=%d pins=%d/%d\n",
+                  (int)servoType,
+                  robot->servo->currentPinX(),
+                  robot->servo->currentPinY());
+
+    if (servoType == ServoType::M5_SCS) {
+      // Official Stack-chan: VM is controlled through PY32 at 0x6F and
+      // movement is sent to SCS0009 IDs 1/2 over Serial2 RX/TX 7/6.
+      robot->servo->setTorque(true);
+      Serial.println("[EspNowRemote] M5_SCS PY32/Serial2 active; PWM GPIO probes skipped");
+    } else if (servoType == ServoType::PWM) {
+      int homeX = robot->servo->currentPinX();
+      int homeY = robot->servo->currentPinY();
 #if defined(ARDUINO_M5STACK_CORES3)
-    if (homeX == 32 || homeX == 33 || homeX < 1) homeX = DEFAULT_SERVO_PIN_X;
-    if (homeY == 32 || homeY == 33 || homeY < 1 || homeY == 2) homeY = DEFAULT_SERVO_PIN_Y;
+      if (homeX == 32 || homeX == 33 || homeX < 1) homeX = DEFAULT_SERVO_PIN_X;
+      if (homeY == 32 || homeY == 33 || homeY < 1 || homeY == 2) homeY = DEFAULT_SERVO_PIN_Y;
 #if defined(ENABLE_CAMERA)
-    homeX = DEFAULT_SERVO_PIN_X;
-    homeY = DEFAULT_SERVO_PIN_Y;
+      homeX = DEFAULT_SERVO_PIN_X;
+      homeY = DEFAULT_SERVO_PIN_Y;
 #endif
 #endif
-    Serial.printf("[EspNowRemote] probe home pins x=%d y=%d\n", homeX, homeY);
+      Serial.printf("[EspNowRemote] probe home pins x=%d y=%d\n", homeX, homeY);
 
 #if defined(ARDUINO_M5STACK_CORES3) && defined(ENABLE_CAMERA)
-    // Do not PWM GPIO2 (camera XCLK). Port C is the head on this build.
-    Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 (camera build) ===");
-    avatar.setSpeechText("Port C");
-    robot->servo->reattachOnPins(18, 17, "port-C");
-    robot->servo->hardSweep("port-C");
-    delay(400);
+      Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 (camera build) ===");
+      avatar.setSpeechText("Port C");
+      robot->servo->reattachOnPins(18, 17, "port-C");
+      robot->servo->hardSweep("port-C");
+      delay(400);
 #else
-    Serial.println("[EspNowRemote] === PORT A hardSweep GPIO1/2 ===");
-    avatar.setSpeechText("Port A");
-    robot->servo->reattachOnPins(1, 2, "port-A");
-    robot->servo->hardSweep("port-A");
-    delay(400);
+      Serial.println("[EspNowRemote] === PORT A hardSweep GPIO1/2 ===");
+      avatar.setSpeechText("Port A");
+      robot->servo->reattachOnPins(1, 2, "port-A");
+      robot->servo->hardSweep("port-A");
+      delay(400);
 
-    Serial.println("[EspNowRemote] === PORT B hardSweep GPIO8/9 ===");
-    avatar.setSpeechText("Port B");
-    robot->servo->reattachOnPins(8, 9, "port-B");
-    robot->servo->hardSweep("port-B");
-    delay(400);
+      Serial.println("[EspNowRemote] === PORT B hardSweep GPIO8/9 ===");
+      avatar.setSpeechText("Port B");
+      robot->servo->reattachOnPins(8, 9, "port-B");
+      robot->servo->hardSweep("port-B");
+      delay(400);
 
-    Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 ===");
-    avatar.setSpeechText("Port C");
-    robot->servo->reattachOnPins(18, 17, "port-C");
-    robot->servo->hardSweep("port-C");
-    delay(400);
+      Serial.println("[EspNowRemote] === PORT C hardSweep GPIO18/17 ===");
+      avatar.setSpeechText("Port C");
+      robot->servo->reattachOnPins(18, 17, "port-C");
+      robot->servo->hardSweep("port-C");
+      delay(400);
 #endif
 
-    robot->servo->reattachOnPins(homeX, homeY, "restore-home");
-    Serial.printf("[EspNowRemote] === probes done; restored pins x=%d y=%d ===\n",
-                  homeX, homeY);
-    Serial.println("[EspNowRemote] If NONE moved: measure Grove RED pin for ~5V, check servo plug/type (SG90 PWM vs SCS)");
+      robot->servo->reattachOnPins(homeX, homeY, "restore-home");
+      Serial.printf("[EspNowRemote] === probes done; restored pins x=%d y=%d ===\n",
+                    homeX, homeY);
+      Serial.println("[EspNowRemote] If NONE moved: measure Grove RED pin for ~5V and check the PWM servo cable");
+    } else {
+      Serial.println("[EspNowRemote] serial servo backend active; PWM GPIO probes skipped");
+    }
     avatar.setSpeechText("");
   } else {
     Serial.println("[EspNowRemote] ERROR: robot/servo is null — cannot drive head");
@@ -340,8 +354,12 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
   static bool s_logged_once = false;
   if (!s_logged_once) {
     s_logged_once = true;
-    M5.Power.setExtOutput(true);
-    robot->servo->dumpAndReattach("espnow-first-packet");
+    if (robot->servo->servoType() == ServoType::PWM) {
+      M5.Power.setExtOutput(true);
+      robot->servo->dumpAndReattach("espnow-first-packet");
+    } else if (robot->servo->servoType() == ServoType::M5_SCS) {
+      robot->servo->setTorque(true);
+    }
   }
 
   int servo_x = mapClamped(yaw,
@@ -357,7 +375,8 @@ void EspNowRemoteMod::applyServoControl(int16_t yaw, int16_t pitch, int16_t spee
   uint32_t millis_for_move = (speed < 0) ? 0 : static_cast<uint32_t>(speed);
 
   robot->servo->writeOffset(servo_x, servo_y);
-  Serial.printf("[EspNowRemote] servo x=%d y=%d pins=%d/%d move_ms=%lu\n",
+  Serial.printf("[EspNowRemote] servo type=%d x=%d y=%d pins=%d/%d move_ms=%lu\n",
+                (int)robot->servo->servoType(),
                 servo_x, servo_y,
                 robot->servo->currentPinX(), robot->servo->currentPinY(),
                 static_cast<unsigned long>(millis_for_move));

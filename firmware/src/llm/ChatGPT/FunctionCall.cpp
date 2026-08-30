@@ -30,6 +30,7 @@
 #include "llm/LLMBase.h"
 #include "Gesture.h"
 #include "CameraAction.h"
+#include "MusicAction.h"
 using namespace m5avatar;
 
 
@@ -246,12 +247,12 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"play_sd_content\","
-    "\"description\": \"SD카드에 저장된 콘텐츠를 재생한다. 공부 프로그램을 시작하거나 음악을 틀어달라고 할 때 호출한다.\","
+    "\"description\": \"SD카드 콘텐츠. 공부 시작 또는 음악 재생. 음악을 끄거나 멈추라고 하면 content_type=music, name=stop. 화면을 눌러도 음악이 멈춘다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
         "\"content_type\":{ \"type\": \"string\", \"enum\": [\"study_program\", \"music\"], \"description\": \"study_program: 공부 프로그램, music: SD 음악\" },"
-        "\"name\":{ \"type\": \"string\", \"description\": \"프로그램명. daily/데일리/공부, english/영어, math/수학/소마, math6/6세. 비우면 데일리 10분.\" }"
+        "\"name\":{ \"type\": \"string\", \"description\": \"공부: daily/영어/수학/6세. 음악: 곡 이름. 끄려면 stop.\" }"
       "},"
       "\"required\": [\"content_type\"]"
     "}"
@@ -1439,14 +1440,31 @@ String FunctionCall::play_sd_content(const char* content_type, const char* name)
     return String("{\"result\":\"") + esc + "\"}";
   }
 
+  String want = name ? String(name) : String();
+  want.trim();
+  String wantLower = want;
+  wantLower.toLowerCase();
+  bool stopReq = (wantLower == "stop") || (wantLower == "off")
+      || (want.indexOf("꺼") >= 0) || (want.indexOf("그만") >= 0)
+      || (want.indexOf("정지") >= 0);
+  if (stopReq) {
+    if (music_action_is_playing()) {
+      music_action_stop();
+      return "{\"result\":\"음악을 멈출게요. 화면을 눌러도 정지할 수 있어요.\"}";
+    }
+    return "{\"result\":\"재생 중인 음악이 없어요.\"}";
+  }
+
   String file = find_music_on_sd(name);
   if (file.length() == 0) {
     return "{\"error\":\"SD /app/AiStackChanEx/music/ 에 mp3 파일이 없어요.\"}";
   }
   String path = String(APP_DATA_PATH) + "music/" + file;
-  bool ok = playMP3SD(path.c_str());
-  if (ok) return String("{\"result\":\"") + file + " 를 재생했어요.\"}";
-  return "{\"error\":\"음악을 재생하지 못했어요.\"}";
+  if (!music_action_request_play(path.c_str(), file.c_str())) {
+    return "{\"error\":\"음악을 준비하지 못했어요.\"}";
+  }
+  _deferredActionRequested = true;
+  return "";
 }
 
 #if defined(ENABLE_CAMERA)

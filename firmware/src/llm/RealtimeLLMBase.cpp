@@ -150,7 +150,16 @@ void RealtimeLLMBase::webSocketProcess()
     RealtimeStateSnapshot state = getRealtimeStateSnapshot();
     if(state.recording){
         enterMutexAudio();
-        //M5.Mic.begin();
+        if (!M5.Mic.isEnabled()) {
+            if (!M5.Mic.begin()) {
+                exitMutexAudio();
+                Serial.println("[realtime] Mic.begin failed; stop record");
+                stopRealtimeRecord();
+                delay(100);
+                return;
+            }
+            delay(20);
+        }
         if(!M5.Mic.record(rtRecBuf, rtRecLength, rtRecSamplerate)){
             Serial.println("Mic.record() returns false");
             delay(1000);

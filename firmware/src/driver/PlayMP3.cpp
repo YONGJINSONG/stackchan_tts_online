@@ -46,35 +46,101 @@ void mp3_init(void)
     audioLogger = &Serial;
 }
 
-void playMP3(AudioFileSourceBuffer *buff){
+static volatile bool s_mp3Running = false;
+static volatile bool s_mp3Stop = false;
+static volatile bool s_mp3StoppedByUser = false;
 
-  M5.Mic.end();
-  M5.Speaker.begin();
+void playMP3_request_stop() {
+  s_mp3Stop = true;
+}
 
-  mp3->begin(buff, &out);
+bool playMP3_is_running() {
+  return s_mp3Running;
+}
+
+bool playMP3_was_stopped() {
+  return s_mp3StoppedByUser;
+}
+
+static bool claim_speaker_i2s() {
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
+  if (M5.Speaker.isEnabled()) M5.Speaker.end();
+  delay(40);
+  if (M5.Speaker.begin()) return true;
+  Serial.println("mp3 Speaker.begin retry");
+  delay(80);
+  M5.Speaker.end();
+  delay(40);
+  return M5.Speaker.begin();
+}
+
+bool playMP3(AudioFileSourceBuffer *buff, uint32_t maxPlayMs){
+  s_mp3Stop = false;
+  s_mp3StoppedByUser = false;
+  s_mp3Running = true;
+
+  if (!claim_speaker_i2s()) {
+    Serial.println("mp3 Speaker.begin failed");
+    s_mp3Running = false;
+    delay(40);
+    M5.Mic.begin();
+    return false;
+  }
+
+  if (!mp3->begin(buff, &out)) {
+    Serial.println("mp3 begin failed");
+    M5.Speaker.end();
+    delay(40);
+    M5.Mic.begin();
+    s_mp3Running = false;
+    return false;
+  }
   Serial.println("mp3 start");
 
-  // 안전 타임아웃: 비표준/손상 MP3에서 디코더가 동기를 못 잡고 isRunning()이 영원히 true면
-  // 스피커가 켜진 채 garbage("치익") 무한 출력 → 전원 꺼야만 멈춤. 30초 한도로 강제 종료.
-  const uint32_t kMaxPlayMs = 30000;
+  const bool touchStop = (maxPlayMs == 0);
   uint32_t startMs = millis();
+  bool ok = true;
   while(mp3->isRunning()) {
+    if (touchStop) {
+      M5.update();
+      if (M5.Touch.getCount()) {
+        auto t = M5.Touch.getDetail();
+        if (t.wasReleased()) s_mp3Stop = true;
+      }
+    }
+    if (s_mp3Stop) {
+      mp3->stop();
+      s_mp3StoppedByUser = true;
+      Serial.println("mp3 stop (touch/stop)");
+      break;
+    }
     if (!mp3->loop()) {
       mp3->stop();
       Serial.println("mp3 stop");
     }
-    if (millis() - startMs > kMaxPlayMs) {
+    if (maxPlayMs > 0 && (millis() - startMs > maxPlayMs)) {
       mp3->stop();
-      Serial.println("mp3 stop (timeout 30s — bad/looping file?)");
+      Serial.printf("mp3 stop (timeout %us)\n", (unsigned)(maxPlayMs / 1000));
       break;
     }
     delay(1);
   }
 
-  M5.Speaker.stop();   // 출력 버퍼 비우기(잔여 노이즈 방지)
-  M5.Speaker.end();
-  M5.Mic.begin();
+  uint32_t playedMs = millis() - startMs;
+  if (!s_mp3StoppedByUser && playedMs < 250) {
+    Serial.printf("mp3 too short (%ums) — treat as fail\n", (unsigned)playedMs);
+    ok = false;
+  }
 
+  M5.Speaker.stop();
+  M5.Speaker.end();
+  delay(40);
+  if (!M5.Mic.begin()) {
+    Serial.println("mp3 Mic.begin failed");
+  }
+  s_mp3Running = false;
+  return ok || s_mp3StoppedByUser;
 }
 
 bool playMP3SPIFFS(const char *filename)
@@ -96,14 +162,13 @@ bool playMP3SPIFFS(const char *filename)
       avatar.setExpression(Expression::Happy);
       servo_home = false;
 
-      playMP3(buff);
+      result = playMP3(buff);
       
       avatar.setExpression(Expression::Neutral);
       servo_home = true;
 
       delete file_mp3;
       delete buff;
-      result = true;
     }
   }else{
     Serial.println("mp3 file is not exist");
@@ -115,7 +180,7 @@ bool playMP3SPIFFS(const char *filename)
 
 bool playMP3SD(const char *filename)
 {
-  bool result;
+  bool result = false;
 
   sd_bus_lock();   // CoreS3: ストリーミング中ずっとGPIO35をMISO入力に保つ(描画衝突→音切れ防止)
 
@@ -139,14 +204,13 @@ bool playMP3SD(const char *filename)
       bool prevServoHome = servo_home;
       servo_home = false;
 
-      playMP3(buff);
+      result = playMP3(buff, 0);
 
       avatar.setExpression(prevExpr);
       servo_home = prevServoHome;
 
       delete file_mp3;
       delete buff;
-      result = true;
     }
   }else{
     Serial.println("mp3 file is not exist");

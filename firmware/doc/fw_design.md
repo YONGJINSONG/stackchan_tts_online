@@ -3,6 +3,7 @@ Notes on FW design, etc.
 
 - [Task](#task)
 - [ESP-NOW Remote Control Mod](#esp-now-remote-control-mod)
+- [CoreS3 Camera and Official Stack-chan Servo](#cores3-camera-and-official-stack-chan-servo)
 - [Realtime API Function Calling](#realtime-api-function-calling)
   - [Avatar Expression](#avatar-expression)
 - [Web App](#web-app)
@@ -35,6 +36,22 @@ Notes on FW design, etc.
 - laser にはまだ反映しない。
 - ESP-NOW Mod 実行中は Wi-Fi channel 変更により Web/FTP/Realtime API と干渉する可能性がある。
 - ESP-NOW Mod 離脱時は ESP-NOW を停止し、offline mode でなければ Wi-Fi STA の再接続を最大 5 秒待つ。
+
+## CoreS3 Camera and Official Stack-chan Servo
+
+The official CoreS3 Stack-chan profile uses `M5_SCS` servos through the PY32 controller at I2C address `0x6F`. Serial2 uses RX/TX pins 7/6, and servo IDs 1 and 2 control the X/Y axes. CoreS3 GPIO remapping, PWM reattachment, and hard-sweep diagnostics are restricted to the PWM servo type. ESP-NOW movement uses the configured center and limits through `ServoCustom::writeOffset`.
+
+The CoreS3 GC0308 camera uses the board-provided external XCLK (`pin_xclk = -1`) and borrows the already-running `M5.In_I2C` port for SCCB. Camera sessions must not release, reinstall, or restart that I2C port because the same board bus also controls the PY32 servo power path.
+
+Camera capture uses the public `esp_camera_init`, `esp_camera_fb_get`, `esp_camera_fb_return`, and `esp_camera_deinit` lifecycle. Initialization discards two warm-up frames. A missed capture triggers one full driver deinitialization and reinitialization; low-level `cam_take` and `cam_stop`/`cam_start` recovery loops are intentionally avoided.
+
+The camera build links Espressif's precompiled ESP32-S3 `cam_hal` and `ll_cam` objects unchanged, matching the known-good CoreS3 example. Do not recompile them with custom DMA limits, EOF queue depth, task affinity, clock selection, stop/start state changes, or `cam_clk_sel` patches: the custom HAL/LL path produced about 66 EOF interrupts per VSYNC and never completed a frame, while the framework objects capture QVGA RGB565 successfully. Only the GC0308 sensor unit is overridden. GC0308 register reads can time out after returning the stale sensor-ID byte (`0x9B`), so RGB565, QVGA subsampling, and orientation use checked write-only values (`0x24=0xA6`, page-1 `0x53=0x80`/`0x55=0x01`) plus a software shadow for register `0x14`. Page-0 defaults must not be carried into page 1: setting page-1 `0x55` bit 7 stalls the SCCB bus. The PCLK register stays at the framework default.
+
+GC0308 RGB565 frames are big-endian (`RGB565_BE`) and are retained as high-byte/low-byte pairs in the preview buffer. M5GFX therefore consumes that buffer with `setSwapBytes(false)` (`swap565_t` layout); enabling byte swap corrupts only the LCD preview colors. BMP export explicitly reassembles each big-endian pixel before writing BGR888.
+
+Photo countdown/capture holds the servo at its configured origin and rejects queued expression, gaze, web, and ESP-NOW movement until the action ends. Kids Tutor uses the same motion hold while questions are active. After the completion sound finishes, the hold is released and the normal gesture dance is queued; the dance sequence ends at the origin.
+
+Realtime defers proactive battery, idle, touch, and proximity responses while a camera or music function is pending and while another response is in flight. This prevents a second response from reclaiming the single I2S peripheral during shutter playback or camera DMA setup.
 
 ## Realtime API Function Calling
 

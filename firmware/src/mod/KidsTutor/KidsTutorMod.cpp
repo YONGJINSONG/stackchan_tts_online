@@ -12,6 +12,7 @@
 #include "kids_tutor/TutorConfig.h"
 #include "Robot.h"
 #include "NightMode.h"
+#include "Gesture.h"
 #if defined(REALTIME_API)
 #include "llm/RealtimeLLMBase.h"
 #endif
@@ -77,9 +78,10 @@ bool KidsTutorMod::ensureReady(String& errOut) {
 
   Serial.println("[kids] init: databases loaded");
   g_ui.begin();
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
-  if (M5.Mic.isEnabled()) M5.Mic.end();
   Serial.println("[kids] init: voice settings");
   if (!g_ui.beginVoice(SD)) {
     Serial.println("[kids] voice lite unavailable; button menu still works");
@@ -116,15 +118,19 @@ void KidsTutorMod::beginSession(TutorEngine::Subject subject) {
     g_ui.showMessage("ERROR", err);
     return;
   }
-  // Realtime has already released I2S for a deferred mode switch. Keep the mic
-  // stopped: the first local WAV would otherwise tear down a newly-created
-  // mic_task immediately and can crash inside i2s_stop().
+  // Realtime has already released I2S for a deferred mode switch. End mic
+  // before speaker: Speaker.end() while mic_task is in i2s_stop() panics.
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
   pauseUsageTimer();
   Serial.printf("[kids] beginSession subject=%d\n", (int)subject);
+  // Keep the head at its configured origin for the entire question session.
+  gesture_set_motion_hold(true, true);
   _session = g_tutor.start(subject);
   if (!_session) {
+    gesture_set_motion_hold(false);
     g_ui.showMessage("NO QUESTION", "문제를 불러오지 못했어요.");
     delay(1200);
     showMenu();
@@ -152,9 +158,10 @@ void KidsTutorMod::init(void) {
   uint32_t pauseStart = millis();
   while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
   Serial.println("[kids] init: avatar renderer paused");
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
-  if (M5.Mic.isEnabled()) M5.Mic.end();
 
   String err;
   if (!ensureReady(err)) {
@@ -179,6 +186,11 @@ void KidsTutorMod::pause(void) {
     resumeUsageTimer();
   }
   _hasPending = false;
+  gesture_set_motion_hold(false);
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
+  while (M5.Speaker.isPlaying()) delay(2);
+  M5.Speaker.end();
   g_avatar_render_pause = false;
   night_mode_hold_day_brightness(false);
   avatar.setSpeechText("");
@@ -230,6 +242,10 @@ void KidsTutorMod::idle(void) {
   if (!_session) return;
   if (g_tutor.sessionComplete()) {
     g_tutor.clearSessionComplete();
+    // sessionComplete becomes true only after stagewin.wav finishes.
+    gesture_set_motion_hold(false);
+    bool danceQueued = gesture_dance();
+    Serial.printf("[kids] stage win dance queued=%d\n", (int)danceQueued);
     endSessionToMenu();
     return;
   }

@@ -18,6 +18,7 @@ volatile bool g_inAiMod = false;
 #include "Scheduler.h"
 #include "MySchedule.h"
 #include "Sfx.h"
+#include "MusicAction.h"
 #include "share/SDUtil.h"
 #include "Gesture.h"
 #include "face/RoboEyesView.h"   // 챗 모드 얼굴 = RoboEyes 눈 (LayeredFace 없을 때)
@@ -68,6 +69,10 @@ void RealtimeAiMod::init(void)
   //avatar.setSpeechText("Realtime AI");
   avatar.set_isSubWindowEnable(true);
   pRtLLM->resumeWebSocketLoopTask();
+  // Kids/camera leave the TLS session dead. Sending on it fails (-80) and
+  // the 5s auto-reconnect then hits SSL alloc-failed on a fragmented heap.
+  // Drop the socket on this task after resume so buffers are freed first.
+  pRtLLM->requestReconnect();
   g_inAiMod = true;
   // SD LayeredFace가 있으면 아바타 얼굴 유지. 없으면 RoboEyes로 화면 점유.
   if (!layered_face_active()) {
@@ -84,6 +89,8 @@ void RealtimeAiMod::pause(void)
   if (pRtLLM->isRealtimeRecordRequested()) {
     pRtLLM->stopRealtimeRecord();
   }
+  if (M5.Mic.isEnabled()) M5.Mic.end();
+  delay(40);
   uint32_t audioDrainStart = millis();
   while (M5.Speaker.isPlaying() && millis() - audioDrainStart < 300) {
     delay(1);
@@ -154,6 +161,12 @@ void RealtimeAiMod::display_touched(int16_t x, int16_t y)
   {
     night_mode_force_sleep(false);   // 깨우기(스케줄 복귀 + 화면 밝게)
     sw_tone();
+  }
+  if (music_action_is_playing())
+  {
+    Serial.println("[music] stop by tap");
+    music_action_stop();
+    return;
   }
   if (box_stt.contain(x, y))
   {

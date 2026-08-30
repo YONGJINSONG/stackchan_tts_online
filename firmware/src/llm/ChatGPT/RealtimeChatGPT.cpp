@@ -15,6 +15,7 @@
 #include "Robot.h"
 #include "DiagLog.h"
 #include "CameraAction.h"
+#include "MusicAction.h"
 
 #include <base64.h>
 #include <esp_heap_caps.h>
@@ -119,8 +120,15 @@ static bool audio_i2s_held = false;
 static void realtime_claim_speaker_i2s() {
     if (audio_i2s_held) return;
     enterMutexAudio();
-    M5.Mic.end();
-    M5.Speaker.begin();
+    if (M5.Mic.isEnabled()) M5.Mic.end();
+    vTaskDelay(pdMS_TO_TICKS(40));
+    if (!M5.Speaker.begin()) {
+        Serial.println("[WSc] Speaker.begin failed");
+        vTaskDelay(pdMS_TO_TICKS(40));
+        M5.Mic.begin();
+        exitMutexAudio();
+        return;
+    }
     audio_i2s_held = true;
 }
 
@@ -128,7 +136,10 @@ static void realtime_release_speaker_i2s(bool beginMic) {
     if (!audio_i2s_held) return;
     while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
     M5.Speaker.end();
-    if (beginMic) M5.Mic.begin();
+    vTaskDelay(pdMS_TO_TICKS(40));
+    if (beginMic && !M5.Mic.begin()) {
+        Serial.println("[WSc] Mic.begin failed after speaker release");
+    }
     exitMutexAudio();
     audio_i2s_held = false;
 }
@@ -178,6 +189,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 			last_commit_time = 0;
             if (p_this->hasDeferredFunctionCall) {
                 camera_action_abandon();
+                music_action_abandon();
                 p_this->hasDeferredFunctionCall = false;
                 p_this->deferredFunctionCallId = "";
                 Serial.println("[camera-action] deferred call abandoned on disconnect");
@@ -384,6 +396,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
                 if (modeSwitchRequested && deferredActionRequested) {
                     camera_action_abandon();
+                    music_action_abandon();
                     String response = "{\\\"error\\\":\\\"mode switch cancelled the camera request\\\"}";
                     String json(conversation_item_create);
                     json.replace("REPLACE_TO_CALL_ID", p_this->deferredFunctionCallId);
@@ -719,7 +732,7 @@ void RealtimeChatGPT::onWebSocketTick() {
   // called concurrently with webSocket.loop().
   if (hasDeferredFunctionCall) {
     String result;
-    if (camera_action_take_result(result)) {
+    if (camera_action_take_result(result) || music_action_take_result(result)) {
       result.replace("\"", "\\\"");
       String json(conversation_item_create);
       json.replace("REPLACE_TO_CALL_ID", deferredFunctionCallId);
@@ -733,6 +746,11 @@ void RealtimeChatGPT::onWebSocketTick() {
       Serial.println("[WSc] deferred function complete (follow-up requested)");
       return;
     }
+
+    // Countdown/capture/save owns the audio and camera DMA handoff until a
+    // function result is ready. A battery/idle/touch proactive queued during
+    // this window must not create a second response and reclaim I2S.
+    return;
   }
 
   // (1) Response-timeout watchdog. If a turn/proactive request never produced a
@@ -745,6 +763,11 @@ void RealtimeChatGPT::onWebSocketTick() {
     webSocket.disconnect();
     return;
   }
+
+  // There may already be a normal or deferred follow-up response in flight.
+  // Keep proactive messages queued until response.done clears the watchdog;
+  // otherwise two responses can race for the single speaker I2S peripheral.
+  if (t != 0) return;
 
   // (2) Drain a queued proactive utterance.
   if (!hasPendingProactive) return;

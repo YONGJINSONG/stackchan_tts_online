@@ -17,6 +17,7 @@ extern Avatar avatar;
 
 volatile uint32_t gesture_suppress_until = 0;
 volatile bool g_gesture_playing = false;
+static volatile bool g_gesture_motion_hold = false;
 static QueueHandle_t gestureQueue = NULL;
 
 enum class GestureCommandType : uint8_t {
@@ -44,6 +45,10 @@ static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms)
     Serial.println("[gesture] skip (camera owns servo GPIO/I2C)");
     return;
   }
+  if (g_gesture_motion_hold) {
+    Serial.println("[gesture] skip (motion held)");
+    return;
+  }
   extern volatile bool espnow_remote_servo_override;
   if (espnow_remote_servo_override) {
     Serial.println("[gesture] skip (espnow remote owns servo)");
@@ -68,8 +73,8 @@ static void play_sequence(const GestureStep* steps, int n, uint32_t tail_pad_ms)
 
   g_gesture_playing = true;
   for(int i = 0; i < n; i++){
-    if (camera_is_busy()) {
-      Serial.println("[gesture] abort remaining steps (camera taking hardware)");
+    if (camera_is_busy() || g_gesture_motion_hold) {
+      Serial.println("[gesture] abort remaining steps (motion held/camera busy)");
       break;
     }
     Serial.printf("[gesture]   step %d: x=%d y=%d ms=%u\n", i, steps[i].degX, steps[i].degY, steps[i].ms);
@@ -159,6 +164,9 @@ void gesture_play(Expression e) {
     Serial.println("[gesture] play called but queue is NULL");
     return;
   }
+  if (g_gesture_motion_hold || camera_is_busy()) {
+    return;
+  }
 #if defined(REALTIME_API)
   if (robot && robot->llm && ((RealtimeLLMBase*)robot->llm)->isRealtimeRecording()) {
     // Don't even enqueue — queue overwrite + Serial during listen competes with TLS.
@@ -191,9 +199,41 @@ bool gesture_dance() {
     Serial.println("[gesture] dance skipped (camera busy)");
     return false;
   }
+  if (g_gesture_motion_hold) {
+    Serial.println("[gesture] dance skipped (motion held)");
+    return false;
+  }
+  gesture_suppress_until = millis() + 7000;
   GestureCommand command{GestureCommandType::Dance, Expression::Happy};
   xQueueOverwrite(gestureQueue, &command);
   Serial.println("[gesture] dance queued");
   return true;
 #endif
+}
+
+void gesture_set_motion_hold(bool hold, bool center) {
+  g_gesture_motion_hold = hold;
+
+  if (hold && gestureQueue != NULL) {
+    xQueueReset(gestureQueue);
+  }
+
+  if (hold) {
+    // M5_SCS moves block the gesture task for their command duration. Wait
+    // before centering so two tasks never write Serial2 concurrently.
+    uint32_t waitStart = millis();
+    while (g_gesture_playing && millis() - waitStart < 2200) {
+      delay(10);
+    }
+  }
+
+  if (center && robot != nullptr && robot->servo != nullptr) {
+    robot->servo->moveTo(0, 0, 350);
+  }
+
+  Serial.printf("[gesture] motion hold=%d center=%d\n", (int)hold, (int)center);
+}
+
+bool gesture_motion_held() {
+  return g_gesture_motion_hold;
 }
