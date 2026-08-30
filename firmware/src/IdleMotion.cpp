@@ -29,17 +29,17 @@ static const Expression IDLE_EXPR[] = {
 
 struct IdleConfig {
     bool enabled        = true;
-    int  minIntervalSec = 25;   // min seconds between idle actions
-    int  maxIntervalSec = 50;   // max seconds between idle actions
-    int  quietAfterSec  = 8;    // stay calm this long after speech ends
+    int  minIntervalSec = 40;   // min seconds between idle actions
+    int  maxIntervalSec = 70;   // max seconds between idle actions
+    int  quietAfterSec  = 15;   // stay calm this long after speech ends
     int  energy         = 5;     // 1..10, higher = more frequent (scales intervals)
     bool gestureEnabled = true;  // play matching head motion with the expression
     bool gazeWander     = true;  // random on-screen eye gaze drift
     bool blinkEnabled   = true;  // occasional blink
-    int  blinkMinSec    = 3;
-    int  blinkMaxSec    = 9;
+    int  blinkMinSec    = 4;
+    int  blinkMaxSec    = 8;
     // weights for [Neutral, Happy, Sleepy, Doubt, Sad, Angry]
-    int  exprWeights[IDLE_EXPR_COUNT] = { 8, 4, 2, 3, 0, 0};
+    int  exprWeights[IDLE_EXPR_COUNT] = {12, 3, 0, 4, 0, 0};
 };
 
 static IdleConfig g_cfg;
@@ -53,6 +53,30 @@ void idle_motion_hold(uint32_t ms) {
 
 static void clampConfig(IdleConfig& c);
 static void buildJson(const IdleConfig& c, String& out);
+
+static bool isPreviousDefault(const IdleConfig& c) {
+    static const int kPreviousWeights[IDLE_EXPR_COUNT] = {8, 4, 2, 3, 0, 0};
+    if (c.minIntervalSec != 25 || c.maxIntervalSec != 50 ||
+        c.quietAfterSec != 8 || c.energy != 5 ||
+        c.blinkMinSec != 3 || c.blinkMaxSec != 9) {
+        return false;
+    }
+    for (int i = 0; i < IDLE_EXPR_COUNT; ++i) {
+        if (c.exprWeights[i] != kPreviousWeights[i]) return false;
+    }
+    return true;
+}
+
+static void applyFriendlyDefaults(IdleConfig& c) {
+    c.minIntervalSec = 40;
+    c.maxIntervalSec = 70;
+    c.quietAfterSec = 15;
+    c.energy = 5;
+    c.blinkMinSec = 4;
+    c.blinkMaxSec = 8;
+    const int weights[IDLE_EXPR_COUNT] = {12, 3, 0, 4, 0, 0};
+    for (int i = 0; i < IDLE_EXPR_COUNT; ++i) c.exprWeights[i] = weights[i];
+}
 
 static void clampConfig(IdleConfig& c) {
     if (c.minIntervalSec < 1)  c.minIntervalSec = 1;
@@ -98,13 +122,23 @@ static void load_from_spiffs() {
         for (int i = 0; i < IDLE_EXPR_COUNT && i < (int)w.size(); i++) c.exprWeights[i] = w[i];
     }
     clampConfig(c);
-    // Old factory 6–14s felt fidgety. Replace that saved pair with the new
-    // defaults so a firmware flash actually calms the robot.
+    // Migrate only untouched legacy defaults. Explicit user settings always
+    // win over firmware defaults.
     if (c.minIntervalSec == 6 && c.maxIntervalSec == 14) {
-        c.minIntervalSec = 25;
-        c.maxIntervalSec = 50;
-        if (c.quietAfterSec == 4) c.quietAfterSec = 8;
-        Serial.println("[idle] migrated fidgety 6-14s interval to 25-50s");
+        applyFriendlyDefaults(c);
+        Serial.println("[idle] migrated legacy defaults to friendly idle");
+        portENTER_CRITICAL(&g_cfgMux);
+        g_cfg = c;
+        portEXIT_CRITICAL(&g_cfgMux);
+        String out;
+        buildJson(c, out);
+        File wf = SPIFFS.open(IDLE_SPIFFS_PATH, "w");
+        if (wf) { wf.print(out); wf.close(); }
+        return;
+    }
+    if (isPreviousDefault(c)) {
+        applyFriendlyDefaults(c);
+        Serial.println("[idle] migrated previous defaults to friendly idle");
         portENTER_CRITICAL(&g_cfgMux);
         g_cfg = c;
         portEXIT_CRITICAL(&g_cfgMux);
@@ -209,8 +243,10 @@ static bool is_speaking() {
 }
 
 static void idle_task(void* arg) {
-    uint32_t nextActionAt = millis() + 20000;
-    uint32_t nextBlinkAt  = millis() + 3000;
+    // Let startup, Wi-Fi and the user's first interaction settle before the
+    // first unsolicited motion.
+    uint32_t nextActionAt = millis() + 45000;
+    uint32_t nextBlinkAt  = millis() + 4000;
     uint32_t lastSpeakMs  = 0;
 
     for (;;) {
@@ -254,8 +290,10 @@ static void idle_task(void* arg) {
             avatar.setExpression(IDLE_EXPR[idx]);
 
             if (c.gazeWander) {
-                float gx = (random(201) - 100) / 100.0f;  // -1.0 .. 1.0
-                float gy = (random(201) - 100) / 100.0f;
+                // Keep an idle glance near centre; full-range eye movement
+                // looks like a deliberate reaction rather than resting gaze.
+                float gx = (random(101) - 50) / 100.0f;  // -0.5 .. 0.5
+                float gy = (random(101) - 50) / 100.0f;
                 avatar.setGaze(gy, gx);
             }
             if (c.gestureEnabled) {
