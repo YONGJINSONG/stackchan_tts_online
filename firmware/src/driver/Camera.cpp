@@ -78,6 +78,8 @@ static bool camera_session_open = false;
 static bool camera_servo_suspended = false;
 static bool camera_audio_held = false;
 static bool camera_ws_paused = false;
+// The framework S3 LL allocates a 30720-byte QVGA RGB565 bounce buffer.
+static constexpr size_t kCameraDmaPreflightMin = 30720;
 
 #if defined(REALTIME_API)
 extern volatile bool g_inAiMod;
@@ -232,11 +234,12 @@ static bool camera_pulse_gc0308_reset(void) {
 }
 
 static void camera_log_dma_heap(const char* stage) {
-    Serial.printf("[camera] DMA heap %s: free=%u largest=%u config_max=%u\n",
+    Serial.printf("[camera] DMA heap %s: free=%u largest=%u config_max=%u preflight_min=%u\n",
                   stage,
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-                  (unsigned)CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX);
+                  (unsigned)CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX,
+                  (unsigned)kCameraDmaPreflightMin);
 }
 
 static esp_err_t camera_driver_initialize(int attempts) {
@@ -244,6 +247,12 @@ static esp_err_t camera_driver_initialize(int attempts) {
     esp_err_t last_err = ESP_FAIL;
 
     for (int attempt = 0; attempt < attempts; ++attempt) {
+        const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+        if (largest_dma < kCameraDmaPreflightMin) {
+            Serial.printf("[camera] insufficient contiguous DMA before init: largest=%u required=%u; sensor reset skipped\n",
+                          (unsigned)largest_dma, (unsigned)kCameraDmaPreflightMin);
+            return ESP_ERR_NO_MEM;
+        }
         if (!camera_pulse_gc0308_reset()) {
             last_err = ESP_ERR_TIMEOUT;
             Serial.printf("[camera] reset release failed; skipping init attempt %d/%d\n",

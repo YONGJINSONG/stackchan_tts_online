@@ -6,6 +6,7 @@
 #include "QuestionDB.h"
 #include "AdaptiveCurriculum.h"
 #include "TutorConfig.h"
+#include "share/SpiRamStlAllocator.h"
 
 class LearningManager {
 public:
@@ -108,10 +109,10 @@ private:
   uint32_t _mathFirstTry = 0;
   uint32_t _reviewAnswered = 0;
 
-  std::vector<ReviewItem> _review;
-  std::vector<String> _sessionMistakes;
-  std::vector<DomainStat> _domainStats;
-  std::vector<MistakeLog> _mistakeLogs;
+  SpiRamVector<ReviewItem> _review;
+  SpiRamVector<String> _sessionMistakes;
+  SpiRamVector<DomainStat> _domainStats;
+  SpiRamVector<MistakeLog> _mistakeLogs;
   String _latestReportPath;
 
   bool loadStudentConfig();

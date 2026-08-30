@@ -31,6 +31,8 @@
 #include "Gesture.h"
 #include "CameraAction.h"
 #include "MusicAction.h"
+#include "BodyLight.h"
+#include "BatteryReaction.h"
 using namespace m5avatar;
 
 
@@ -157,6 +159,11 @@ const String json_Functions =
     "\"parameters\": { \"type\":\"object\", \"properties\": {} }"
   "},"
   "{"
+    "\"name\": \"get_battery\","
+    "\"description\": \"배터리·충전량·남은 전기·배고픈지 물으면 반드시 호출한다. 숫자를 추측하지 말고 결과의 percent와 charging으로 짧게 한국어로 알려준다.\","
+    "\"parameters\": { \"type\":\"object\", \"properties\": {} }"
+  "},"
+  "{"
     "\"name\": \"get_air_quality\","
     "\"description\": \"설정한 지역의 미세먼지(PM10/PM2.5)와 통합대기등급을 가져온다. 사용자가 미세먼지/공기질을 물으면 호출한다.\","
     "\"parameters\": { \"type\":\"object\", \"properties\": {} }"
@@ -204,13 +211,24 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"set_display_power\","
-    "\"description\": \"로니 화면 또는 모니터 불을 켜거나 꺼 달라는 요청에 호출한다. 절전 모드와 별개이며 화면 백라이트만 제어한다.\","
+    "\"description\": \"화면(LCD)만 켜거나 끈다. '화면 꺼줘', '모니터 꺼줘'. 본체 라이트·LED·색깔은 set_body_light.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
         "\"on\":{ \"type\": \"boolean\", \"description\": \"true=화면 켜기, false=화면 끄기\" }"
       "},"
       "\"required\": [\"on\"]"
+    "}"
+  "},"
+  "{"
+    "\"name\": \"set_body_light\","
+    "\"description\": \"본체(몸통) RGB 라이트. 화면이 아니다. 불 켜줘/꺼줘, 색깔 바꿔줘, 빨강/파랑 등으로 즉시 호출. 색을 안 말하면 다음 색으로 바꿔 켠다. 끄려면 on=false.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"on\":{ \"type\": \"boolean\", \"description\": \"false=끄기. 켜거나 색 바꿀 때는 true이거나 생략\" },"
+        "\"color\":{ \"type\": \"string\", \"description\": \"빨강/주황/노랑/초록/하늘/파랑/보라/분홍/하양/무지개. 비우면 다음 색\" }"
+      "}"
     "}"
   "},"
   "{"
@@ -247,12 +265,12 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"play_sd_content\","
-    "\"description\": \"SD카드 콘텐츠. 공부 시작 또는 음악 재생. 음악을 끄거나 멈추라고 하면 content_type=music, name=stop. 화면을 눌러도 음악이 멈춘다.\","
+    "\"description\": \"SD카드 콘텐츠. 공부하자/공부할래/공부 시작이면 과목을 묻지 말고 즉시 content_type=study_program 을 호출한다. 과목을 말하지 않으면 name=daily. 영어/수학/6세를 같이 말하면 그 name. 음악 재생은 content_type=music. 음악을 끄거나 멈추라고 하면 content_type=music, name=stop. 화면을 눌러도 음악이 멈춘다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
-        "\"content_type\":{ \"type\": \"string\", \"enum\": [\"study_program\", \"music\"], \"description\": \"study_program: 공부 프로그램, music: SD 음악\" },"
-        "\"name\":{ \"type\": \"string\", \"description\": \"공부: daily/영어/수학/6세. 음악: 곡 이름. 끄려면 stop.\" }"
+        "\"content_type\":{ \"type\": \"string\", \"enum\": [\"study_program\", \"music\"], \"description\": \"study_program: 공부 프로그램 즉시 시작, music: SD 음악\" },"
+        "\"name\":{ \"type\": \"string\", \"description\": \"공부: 과목 없으면 daily. 영어/수학/6세. 음악: 곡 이름. 끄려면 stop.\" }"
       "},"
       "\"required\": [\"content_type\"]"
     "}"
@@ -453,6 +471,9 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
     else if(strcmp(name, "get_weather") == 0){
       response = get_weather();
     }
+    else if(strcmp(name, "get_battery") == 0){
+      response = battery_status_json();
+    }
     else if(strcmp(name, "get_air_quality") == 0){
       response = get_air_quality();
     }
@@ -483,6 +504,12 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       response = on
         ? "{\"result\":\"화면을 켰어요.\"}"
         : "{\"result\":\"화면을 껐어요.\"}";
+    }
+    else if(strcmp(name, "set_body_light") == 0){
+      bool hasOn = !argsDoc["on"].isNull();
+      bool on = argsDoc["on"] | true;
+      const char* color = argsDoc["color"] | "";
+      response = body_light_request(hasOn, on, color);
     }
     else if(strcmp(name, "set_sleep_mode") == 0){
       bool sleep = argsDoc["sleep"] | true;

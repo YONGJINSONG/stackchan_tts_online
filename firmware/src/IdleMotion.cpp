@@ -29,9 +29,9 @@ static const Expression IDLE_EXPR[] = {
 
 struct IdleConfig {
     bool enabled        = true;
-    int  minIntervalSec = 4;     // min seconds between idle actions
-    int  maxIntervalSec = 12;    // max seconds between idle actions
-    int  quietAfterSec  = 3;     // stay calm this long after speech ends
+    int  minIntervalSec = 25;   // min seconds between idle actions
+    int  maxIntervalSec = 50;   // max seconds between idle actions
+    int  quietAfterSec  = 8;    // stay calm this long after speech ends
     int  energy         = 5;     // 1..10, higher = more frequent (scales intervals)
     bool gestureEnabled = true;  // play matching head motion with the expression
     bool gazeWander     = true;  // random on-screen eye gaze drift
@@ -39,7 +39,7 @@ struct IdleConfig {
     int  blinkMinSec    = 3;
     int  blinkMaxSec    = 9;
     // weights for [Neutral, Happy, Sleepy, Doubt, Sad, Angry]
-    int  exprWeights[IDLE_EXPR_COUNT] = { 5, 6, 2, 3, 1, 1 };
+    int  exprWeights[IDLE_EXPR_COUNT] = { 8, 4, 2, 3, 0, 0};
 };
 
 static IdleConfig g_cfg;
@@ -50,6 +50,9 @@ void idle_motion_hold(uint32_t ms) {
     uint32_t until = millis() + ms;
     if (until > g_holdUntil) g_holdUntil = until;
 }
+
+static void clampConfig(IdleConfig& c);
+static void buildJson(const IdleConfig& c, String& out);
 
 static void clampConfig(IdleConfig& c) {
     if (c.minIntervalSec < 1)  c.minIntervalSec = 1;
@@ -95,6 +98,22 @@ static void load_from_spiffs() {
         for (int i = 0; i < IDLE_EXPR_COUNT && i < (int)w.size(); i++) c.exprWeights[i] = w[i];
     }
     clampConfig(c);
+    // Old factory 6–14s felt fidgety. Replace that saved pair with the new
+    // defaults so a firmware flash actually calms the robot.
+    if (c.minIntervalSec == 6 && c.maxIntervalSec == 14) {
+        c.minIntervalSec = 25;
+        c.maxIntervalSec = 50;
+        if (c.quietAfterSec == 4) c.quietAfterSec = 8;
+        Serial.println("[idle] migrated fidgety 6-14s interval to 25-50s");
+        portENTER_CRITICAL(&g_cfgMux);
+        g_cfg = c;
+        portEXIT_CRITICAL(&g_cfgMux);
+        String out;
+        buildJson(c, out);
+        File wf = SPIFFS.open(IDLE_SPIFFS_PATH, "w");
+        if (wf) { wf.print(out); wf.close(); }
+        return;
+    }
     portENTER_CRITICAL(&g_cfgMux);
     g_cfg = c;
     portEXIT_CRITICAL(&g_cfgMux);
@@ -190,7 +209,7 @@ static bool is_speaking() {
 }
 
 static void idle_task(void* arg) {
-    uint32_t nextActionAt = millis() + 2000;
+    uint32_t nextActionAt = millis() + 20000;
     uint32_t nextBlinkAt  = millis() + 3000;
     uint32_t lastSpeakMs  = 0;
 
@@ -240,7 +259,7 @@ static void idle_task(void* arg) {
                 avatar.setGaze(gy, gx);
             }
             if (c.gestureEnabled) {
-                gesture_play(IDLE_EXPR[idx]);
+                gesture_idle_look();
             }
 
             int span = c.maxIntervalSec - c.minIntervalSec;

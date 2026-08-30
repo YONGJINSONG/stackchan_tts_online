@@ -15,5 +15,6 @@ void   battery_reaction_init();
 void   battery_reaction_tick();
 String battery_reaction_get_json();
 bool   battery_reaction_set_json(const String& json);
+String battery_status_json();   // live percent + charging for the voice tool
 
 #endif  // _BATTERY_REACTION_H

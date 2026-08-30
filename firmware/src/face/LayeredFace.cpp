@@ -1,6 +1,7 @@
 #include "LayeredFace.h"
 #include "Balloon.h"
 #include "Effect.h"
+#include <cstring>
 #include <esp_heap_caps.h>
 
 using namespace m5avatar;
@@ -24,6 +25,12 @@ void LayeredFace::freeSprite(M5Canvas*& spr) {
   spr->deleteSprite();
   delete spr;
   spr = nullptr;
+}
+
+void LayeredFace::freeLayer(LayerSprite& layer) {
+  freeSprite(layer.spr);
+  layer.x = 0;
+  layer.y = 0;
 }
 
 M5Canvas* LayeredFace::loadLayerSprite(const char* path, bool opaqueBase) {
@@ -81,8 +88,88 @@ M5Canvas* LayeredFace::loadLayerSprite(const char* path, bool opaqueBase) {
     freeSprite(spr);
     return nullptr;
   }
-  Serial.printf("[layered-face] rasterized %s\n", path);
+  if (opaqueBase) {
+    Serial.printf("[layered-face] rasterized %s 320x240\n", path);
+  }
   return spr;
+}
+
+LayeredFace::LayerSprite LayeredFace::cropOverlay(M5Canvas* full, const char* path) {
+  LayerSprite out;
+  if (!full) return out;
+
+  const int w = full->width();
+  const int h = full->height();
+  const uint16_t* src = static_cast<const uint16_t*>(full->getBuffer());
+  if (!src || w <= 0 || h <= 0) {
+    freeSprite(full);
+    return out;
+  }
+
+  int minX = w;
+  int minY = h;
+  int maxX = -1;
+  int maxY = -1;
+  for (int y = 0; y < h; ++y) {
+    const uint16_t* row = src + y * w;
+    for (int x = 0; x < w; ++x) {
+      if (row[x] == kTrans) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  if (maxX < 0) {
+    Serial.printf("[layered-face] empty overlay: %s\n", path);
+    freeSprite(full);
+    return out;
+  }
+
+  const int boxW = maxX - minX + 1;
+  const int boxH = maxY - minY + 1;
+  if (boxW == w && boxH == h) {
+    out.spr = full;
+    out.x = 0;
+    out.y = 0;
+    Serial.printf("[layered-face] rasterized %s 320x240 -> %dx%d @ (0,0)\n",
+                  path, boxW, boxH);
+    return out;
+  }
+
+  M5Canvas* crop = new M5Canvas(&M5.Display);
+  crop->setPsram(true);
+  crop->setColorDepth(16);
+  if (!crop->createSprite(boxW, boxH)) {
+    Serial.printf("[layered-face] crop sprite failed: %s %dx%d\n",
+                  path, boxW, boxH);
+    delete crop;
+    freeSprite(full);
+    return out;
+  }
+
+  uint16_t* dst = static_cast<uint16_t*>(crop->getBuffer());
+  if (!dst) {
+    freeSprite(crop);
+    freeSprite(full);
+    return out;
+  }
+  for (int y = 0; y < boxH; ++y) {
+    memcpy(dst + y * boxW, src + (minY + y) * w + minX, (size_t)boxW * sizeof(uint16_t));
+  }
+  freeSprite(full);
+
+  out.spr = crop;
+  out.x = (int16_t)minX;
+  out.y = (int16_t)minY;
+  Serial.printf("[layered-face] rasterized %s 320x240 -> %dx%d @ (%d,%d)\n",
+                path, boxW, boxH, (int)out.x, (int)out.y);
+  return out;
+}
+
+LayeredFace::LayerSprite LayeredFace::loadOverlaySprite(const char* path) {
+  return cropOverlay(loadLayerSprite(path, false), path);
 }
 
 void LayeredFace::loadAll() {
@@ -94,29 +181,29 @@ void LayeredFace::loadAll() {
     return;
   }
 
-  _eyes[EYE_CENTER] = loadLayerSprite("/face/eyes/eye_center.png", false);
-  _eyes[EYE_HAPPY] = loadLayerSprite("/face/eyes/eye_happy.png", false);
-  _eyes[EYE_ANGRY] = loadLayerSprite("/face/eyes/eye_angry.png", false);
-  _eyes[EYE_SAD] = loadLayerSprite("/face/eyes/eye_sad.png", false);
-  _eyes[EYE_SLEEPY] = loadLayerSprite("/face/eyes/eye_sleepy.png", false);
-  _eyes[EYE_SURPRISED] = loadLayerSprite("/face/eyes/eyes_surprised.png", false);
+  _eyes[EYE_CENTER] = loadOverlaySprite("/face/eyes/eye_center.png");
+  _eyes[EYE_HAPPY] = loadOverlaySprite("/face/eyes/eye_happy.png");
+  _eyes[EYE_ANGRY] = loadOverlaySprite("/face/eyes/eye_angry.png");
+  _eyes[EYE_SAD] = loadOverlaySprite("/face/eyes/eye_sad.png");
+  _eyes[EYE_SLEEPY] = loadOverlaySprite("/face/eyes/eye_sleepy.png");
+  _eyes[EYE_SURPRISED] = loadOverlaySprite("/face/eyes/eyes_surprised.png");
 
-  _mouths[MOUTH_IDLE] = loadLayerSprite("/face/mouth/mouth_idle.png", false);
-  _mouths[MOUTH_SMILE] = loadLayerSprite("/face/mouth/mouth_smile.png", false);
-  _mouths[MOUTH_ANGRY] = loadLayerSprite("/face/mouth/mouth_angry.png", false);
-  _mouths[MOUTH_SAD] = loadLayerSprite("/face/mouth/mouth_sad.png", false);
-  _mouths[MOUTH_O] = loadLayerSprite("/face/mouth/mouth_o.png", false);
-  _mouths[MOUTH_OPEN1] = loadLayerSprite("/face/mouth/mouth_open1.png", false);
-  _mouths[MOUTH_OPEN2] = loadLayerSprite("/face/mouth/mouth_open2.png", false);
+  _mouths[MOUTH_IDLE] = loadOverlaySprite("/face/mouth/mouth_idle.png");
+  _mouths[MOUTH_SMILE] = loadOverlaySprite("/face/mouth/mouth_smile.png");
+  _mouths[MOUTH_ANGRY] = loadOverlaySprite("/face/mouth/mouth_angry.png");
+  _mouths[MOUTH_SAD] = loadOverlaySprite("/face/mouth/mouth_sad.png");
+  _mouths[MOUTH_O] = loadOverlaySprite("/face/mouth/mouth_o.png");
+  _mouths[MOUTH_OPEN1] = loadOverlaySprite("/face/mouth/mouth_open1.png");
+  _mouths[MOUTH_OPEN2] = loadOverlaySprite("/face/mouth/mouth_open2.png");
 
-  _blush[BLUSH_NORMAL] = loadLayerSprite("/face/blush/blush_normal.png", false);
-  _blush[BLUSH_SHY] = loadLayerSprite("/face/blush/blush_shy.png", false);
+  _blush[BLUSH_NORMAL] = loadOverlaySprite("/face/blush/blush_normal.png");
+  _blush[BLUSH_SHY] = loadOverlaySprite("/face/blush/blush_shy.png");
 
-  _fx[FX_TEAR] = loadLayerSprite("/face/fx/tear.png", false);
-  _fx[FX_ZZZ] = loadLayerSprite("/face/fx/zzz.png", false);
+  _fx[FX_TEAR] = loadOverlaySprite("/face/fx/tear.png");
+  _fx[FX_ZZZ] = loadOverlaySprite("/face/fx/zzz.png");
 
   _ready = true;
-  Serial.println("[layered-face] ready (pre-rasterized)");
+  Serial.println("[layered-face] ready (pre-rasterized, overlays cropped)");
 }
 
 LayeredFace::LayeredFace() : Face() {
@@ -125,10 +212,10 @@ LayeredFace::LayeredFace() : Face() {
 
 LayeredFace::~LayeredFace() {
   freeSprite(_base);
-  for (int i = 0; i < EYE_COUNT; i++) freeSprite(_eyes[i]);
-  for (int i = 0; i < MOUTH_COUNT; i++) freeSprite(_mouths[i]);
-  for (int i = 0; i < BLUSH_COUNT; i++) freeSprite(_blush[i]);
-  for (int i = 0; i < FX_COUNT; i++) freeSprite(_fx[i]);
+  for (int i = 0; i < EYE_COUNT; i++) freeLayer(_eyes[i]);
+  for (int i = 0; i < MOUTH_COUNT; i++) freeLayer(_mouths[i]);
+  for (int i = 0; i < BLUSH_COUNT; i++) freeLayer(_blush[i]);
+  for (int i = 0; i < FX_COUNT; i++) freeLayer(_fx[i]);
   freeSprite(_composite);
 }
 
@@ -153,6 +240,15 @@ void LayeredFace::blitLayer(M5Canvas* layer, bool opaque) {
     layer->pushSprite(_composite, 0, 0);
   } else {
     layer->pushSprite(_composite, 0, 0, kTrans);
+  }
+}
+
+void LayeredFace::blitLayer(const LayerSprite& layer, bool opaque) {
+  if (!_composite || !layer.spr) return;
+  if (opaque) {
+    layer.spr->pushSprite(_composite, layer.x, layer.y);
+  } else {
+    layer.spr->pushSprite(_composite, layer.x, layer.y, kTrans);
   }
 }
 
@@ -207,10 +303,10 @@ void LayeredFace::pickLayers(Expression e, float mouthOpen,
     if (mouthOpen < 0.10f) _mouthBand = 0;
   }
 
-  if (_mouthBand == 2 && _mouths[MOUTH_OPEN2]) mouth = MOUTH_OPEN2;
-  else if (_mouthBand == 2 && _mouths[MOUTH_O]) mouth = MOUTH_O;
-  else if (_mouthBand == 1 && _mouths[MOUTH_OPEN1]) mouth = MOUTH_OPEN1;
-  else if (_mouthBand == 1 && _mouths[MOUTH_O]) mouth = MOUTH_O;
+  if (_mouthBand == 2 && _mouths[MOUTH_OPEN2].spr) mouth = MOUTH_OPEN2;
+  else if (_mouthBand == 2 && _mouths[MOUTH_O].spr) mouth = MOUTH_O;
+  else if (_mouthBand == 1 && _mouths[MOUTH_OPEN1].spr) mouth = MOUTH_OPEN1;
+  else if (_mouthBand == 1 && _mouths[MOUTH_O].spr) mouth = MOUTH_O;
   // band 0 keeps emotion mouth
 }
 
@@ -218,15 +314,15 @@ void LayeredFace::rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx) {
   if (!_composite || !_base) return;
   blitLayer(_base, true);
   if (blush >= 0 && blush < BLUSH_COUNT) blitLayer(_blush[blush], false);
-  if (blush == BLUSH_SHY && _blush[BLUSH_SHY] == nullptr) {
+  if (blush == BLUSH_SHY && _blush[BLUSH_SHY].spr == nullptr) {
     _composite->fillEllipse(72, 158, 25, 10, 0xF98F);
     _composite->fillEllipse(248, 158, 25, 10, 0xF98F);
   }
 
-  M5Canvas* eyeSpr = _eyes[eye] ? _eyes[eye] : _eyes[EYE_CENTER];
+  const LayerSprite& eyeSpr = _eyes[eye].spr ? _eyes[eye] : _eyes[EYE_CENTER];
   blitLayer(eyeSpr, false);
 
-  M5Canvas* mouthSpr = _mouths[mouth] ? _mouths[mouth] : _mouths[MOUTH_IDLE];
+  const LayerSprite& mouthSpr = _mouths[mouth].spr ? _mouths[mouth] : _mouths[MOUTH_IDLE];
   blitLayer(mouthSpr, false);
 
   if (fx >= 0 && fx < FX_COUNT) blitLayer(_fx[fx], false);

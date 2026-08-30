@@ -8,6 +8,7 @@ extern volatile bool g_gesture_playing;
 
 void gesture_init();
 void gesture_play(m5avatar::Expression e);
+void gesture_idle_look();
 bool gesture_dance();
 
 // Hold the head at a stable pose for camera/tutor operations.

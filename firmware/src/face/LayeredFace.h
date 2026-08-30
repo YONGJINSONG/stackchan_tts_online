@@ -8,7 +8,8 @@
 #include "DrawContext.h"
 
 // SD /face/{base,eyes,mouth,blush,fx}/*.png layered avatar.
-// Layers are decoded once at boot into RGB565 sprites (magenta = transparent).
+// Base and the composite stay 320x240 RGB565. Overlay layers are cropped to
+// the non-magenta bounding box and blit at that offset.
 // Per-frame work is pushSprite only — drawPng in the avatar loop freezes input.
 
 class LayeredFace : public m5avatar::Face {
@@ -48,11 +49,17 @@ private:
   // Magenta chroma key for transparent areas (not used in art outlines).
   static constexpr uint16_t kTrans = 0xF81F;
 
+  struct LayerSprite {
+    M5Canvas* spr = nullptr;
+    int16_t x = 0;
+    int16_t y = 0;
+  };
+
   M5Canvas* _base = nullptr;
-  M5Canvas* _eyes[EYE_COUNT] = {};
-  M5Canvas* _mouths[MOUTH_COUNT] = {};
-  M5Canvas* _blush[BLUSH_COUNT] = {};
-  M5Canvas* _fx[FX_COUNT] = {};
+  LayerSprite _eyes[EYE_COUNT] = {};
+  LayerSprite _mouths[MOUTH_COUNT] = {};
+  LayerSprite _blush[BLUSH_COUNT] = {};
+  LayerSprite _fx[FX_COUNT] = {};
   M5Canvas* _composite = nullptr;
 
   bool _ready = false;
@@ -63,13 +70,17 @@ private:
   int _mouthBand = 0;  // hysteresis: 0 closed, 1 mid, 2 open
 
   M5Canvas* loadLayerSprite(const char* path, bool opaqueBase);
+  LayerSprite loadOverlaySprite(const char* path);
+  LayerSprite cropOverlay(M5Canvas* full, const char* path);
   void freeSprite(M5Canvas*& spr);
+  void freeLayer(LayerSprite& layer);
   void loadAll();
   void pickLayers(m5avatar::Expression e, float mouthOpen,
                   EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx);
   void ensureComposite(int w, int h);
   void rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx);
   void blitLayer(M5Canvas* layer, bool opaque);
+  void blitLayer(const LayerSprite& layer, bool opaque);
 };
 
 bool layered_face_active();

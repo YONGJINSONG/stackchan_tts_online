@@ -28,6 +28,8 @@ static int    g_lowIntervalMin = 15;
 static bool   g_chargeReact    = true;
 static String g_lowPrompt    = "지금 배터리가 얼마 안 남았어. 배고픈 듯이 '배고파~ 충전 좀 해줘' 하고 귀엽게 말해줘. 짧게.";
 static String g_chargePrompt = "방금 충전기에 연결됐어. 밥 먹는 강아지처럼 '냠냠, 잘 먹겠습니다!' 하고 기분 좋게 짧게 말해줘.";
+static int    g_lastLevel    = -1;
+static bool   g_lastCharging = false;
 
 static void clampCfg() {
     if (g_lowThreshold < 1) g_lowThreshold = 1;
@@ -117,6 +119,8 @@ void battery_reaction_tick() {
 
     int level = (int)M5.Power.getBatteryLevel();
     bool charging = M5.Power.isCharging();
+    g_lastLevel = level;
+    g_lastCharging = charging;
 
     // Charging just started (edge). 효과음은 음성반응 토글과 무관하게 발동(매핑 시).
     if (prevCharging == 0 && charging) {
@@ -146,6 +150,30 @@ void battery_reaction_tick() {
             }
         }
     }
+}
+
+String battery_status_json() {
+    int level = g_lastLevel;
+    bool charging = g_lastCharging;
+    if (!camera_is_busy() && camera_sensor_bus_try_lock(80)) {
+        level = (int)M5.Power.getBatteryLevel();
+        charging = M5.Power.isCharging();
+        g_lastLevel = level;
+        g_lastCharging = charging;
+        camera_sensor_bus_unlock();
+    }
+    if (level < 0) level = 0;
+    char buf[192];
+    if (charging) {
+        snprintf(buf, sizeof(buf),
+                 "{\"percent\":%d,\"charging\":true,\"result\":\"배터리 %d퍼센트, 충전 중이에요.\"}",
+                 level, level);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"percent\":%d,\"charging\":false,\"result\":\"배터리 %d퍼센트 남았어요.\"}",
+                 level, level);
+    }
+    return String(buf);
 }
 
 void battery_reaction_init() {

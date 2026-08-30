@@ -68,11 +68,19 @@ void RealtimeAiMod::init(void)
 {
   //avatar.setSpeechText("Realtime AI");
   avatar.set_isSubWindowEnable(true);
+  const bool sessionAlive = pRtLLM->webSocket.isConnected()
+                            && pRtLLM->isRealtimeSessionReady();
   pRtLLM->resumeWebSocketLoopTask();
-  // Kids/camera leave the TLS session dead. Sending on it fails (-80) and
-  // the 5s auto-reconnect then hits SSL alloc-failed on a fragmented heap.
-  // Drop the socket on this task after resume so buffers are freed first.
-  pRtLLM->requestReconnect();
+  // Keep a live session when returning from Kids Tutor. Forcing a reconnect
+  // after the tutor DBs have fragmented internal RAM can leave too little
+  // contiguous memory for TLS and makes subsequent tap-to-talk appear dead.
+  // A genuinely disconnected/not-ready session still uses the normal
+  // reconnect path.
+  if (sessionAlive) {
+    Serial.println("[realtime] resumed existing live session");
+  } else {
+    pRtLLM->requestReconnect();
+  }
   g_inAiMod = true;
   // SD LayeredFace가 있으면 아바타 얼굴 유지. 없으면 RoboEyes로 화면 점유.
   if (!layered_face_active()) {
@@ -170,7 +178,15 @@ void RealtimeAiMod::display_touched(int16_t x, int16_t y)
   }
   if (box_stt.contain(x, y))
   {
-    sw_tone();
+    // Before session.updated, the WebSocket task may still own the audio
+    // mutex. Blocking here for the tap tone freezes the main loop, so no
+    // later touch (including Kids Tutor controls) can be processed. Queue the
+    // listen request silently; RealtimeListenState starts it when ready.
+    if (pRtLLM->isRealtimeSessionReady()) {
+      sw_tone();
+    } else {
+      Serial.println("[realtime] tap before session ready; queuing without tone");
+    }
     toggleRealtimeRecord();
     Serial.printf("[realtime] recording=%d requested=%d ready=%d\n",
                   (int)pRtLLM->isRealtimeRecording(),

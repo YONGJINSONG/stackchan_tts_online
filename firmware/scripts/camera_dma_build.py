@@ -2,7 +2,6 @@ Import("env")
 
 import os
 
-
 camera_source_root = env.subst(
     "$PROJECT_LIBDEPS_DIR/$PIOENV/esp32-camera"
 )
@@ -190,7 +189,7 @@ open(os.path.join(patched_sensor_dir, "gc0308.c"), "w", encoding="utf-8", newlin
     .replace(gc_status_old, gc_status_new, 1)
 )
 
-print("[camera] framework stock HAL/LL with write-only CoreS3 GC0308 config")
+print("[camera] framework stock HAL/LL (DMA 30720) + write-only CoreS3 GC0308")
 
 camera_private_includes = [
     os.path.join(camera_source_root, "driver", "include"),
@@ -203,8 +202,9 @@ camera_private_includes = [
 env.Append(CPPPATH=camera_private_includes)
 
 # Override only the GC0308 sensor unit. The framework's precompiled camera
-# archive supplies its tested S3 cam_hal and ll_cam objects unchanged, matching
-# the known-good CoreS3 example while avoiding SCCB read-modify-write calls.
+# archive supplies its tested S3 cam_hal and ll_cam objects unchanged. Its
+# 30720-byte QVGA RGB565 bounce buffer is required on the physical CoreS3;
+# forcing smaller LL buffers causes EV-EOF-OVF before a frame can complete.
 env.BuildSources(
     env.subst("$BUILD_DIR/camera_sensor"),
     patched_sensor_dir,

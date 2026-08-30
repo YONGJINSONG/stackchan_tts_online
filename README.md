@@ -76,6 +76,7 @@ SD카드 설정은 `Copy-to-SD/` 내용을 카드 루트에 복사한 뒤 채운
 - `app/AiStackChanEx/SC_ExConfig.yaml` — LLM/TTS/STT 선택 (기본: ChatGPT + Whisper + Google TTS)
 - 음악 mp3는 `app/AiStackChanEx/music/` 에 둔다
 - **공부 프로그램**: 이웃 프로젝트 `stackchan_kids_tutor_jiwoo_lite_v4_5_1/sdcard/kids_tutor/` 전체를 SD **루트**에 `/kids_tutor/` 로 복사한다 (문제 DB·`audio/text` WAV·config·progress). 저장소에는 넣지 않는다.
+- 문제 DB를 추가하거나 수정한 뒤 `python firmware/scripts/gen_tutor_index.py --db-dir <SD드라이브>:\kids_tutor\db`를 실행하면 첫 시작부터 빠른 `.qidx` 인덱스를 사용한다. 생략해도 기기가 변경된 DB만 한 번 스캔해 자동 생성한다.
 
 Google Cloud TTS는 [Text-to-Speech API](https://cloud.google.com/text-to-speech)를 켠 뒤 API 키를 `apikey.tts`에 넣는다.
 

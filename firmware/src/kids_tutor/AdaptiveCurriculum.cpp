@@ -97,26 +97,33 @@ const AdaptiveCurriculum::TrackState* AdaptiveCurriculum::track(const String& ca
 }
 
 AdaptiveCurriculum::LevelPool* AdaptiveCurriculum::levelPool(const String& category, uint8_t level) {
-  for (auto& p : _pools) if (p.category == category && p.level == level) return &p;
+  return levelPool(QuestionDB::hashText(category), level);
+}
+AdaptiveCurriculum::LevelPool* AdaptiveCurriculum::levelPool(uint32_t categoryHash, uint8_t level) {
+  for (auto& p : _pools) if (p.categoryHash == categoryHash && p.level == level) return &p;
   return nullptr;
 }
 const AdaptiveCurriculum::LevelPool* AdaptiveCurriculum::levelPool(const String& category, uint8_t level) const {
-  for (const auto& p : _pools) if (p.category == category && p.level == level) return &p;
+  const uint32_t categoryHash = QuestionDB::hashText(category);
+  for (const auto& p : _pools) if (p.categoryHash == categoryHash && p.level == level) return &p;
   return nullptr;
 }
 void AdaptiveCurriculum::buildPools() {
   _pools.clear();
   if (!_db) return;
   for (size_t i=0;i<_db->size();++i) {
-    Question q;
-    if (!_db->readAt(i,q) || !q.category.length()) continue;
-    LevelPool* p = levelPool(q.category,q.level);
+    uint8_t level = 0;
+    uint32_t categoryHash = 0;
+    if (!_db->metadataAt(i, level, categoryHash) || categoryHash == 0) continue;
+    LevelPool* p = levelPool(categoryHash, level);
     if (!p) {
-      LevelPool np; np.category=q.category; np.level=q.level; _pools.push_back(np);
+      LevelPool np; np.categoryHash=categoryHash; np.level=level; _pools.push_back(np);
       p=&_pools.back();
     }
     p->indices.push_back((uint16_t)i);
   }
+  Serial.printf("[adaptive] pools from metadata records=%u pools=%u\n",
+                (unsigned)_db->size(), (unsigned)_pools.size());
 }
 AdaptiveCurriculum::ProblemState* AdaptiveCurriculum::problem(const String& id) {
   for (auto& p : _problems) if (p.id == id) return &p;
@@ -208,7 +215,7 @@ bool AdaptiveCurriculum::pickFreshCurrent(const String& category, const String& 
   uint32_t candidateCount = 0;
   for (uint16_t idx : lp->indices) {
     Question q;
-    if (!_db->readAt(idx,q)) continue;
+    if (!_db->readAt(idx,q) || q.category != category) continue;
     bool alreadyAssessed=false; for (const auto& id:t->uniqueCurrent) if(id==q.id){alreadyAssessed=true;break;}
     if (q.id == avoidId || alreadyAssessed || isRecent(q.id)) continue;
     const ProblemState* ps = problem(q.id);
@@ -222,7 +229,7 @@ bool AdaptiveCurriculum::pickFreshCurrent(const String& category, const String& 
   candidateCount = 0;
   for (uint16_t idx : lp->indices) {
     Question q;
-    if (!_db->readAt(idx,q)) continue;
+    if (!_db->readAt(idx,q) || q.category != category) continue;
     bool alreadyAssessed=false; for (const auto& id:t->uniqueCurrent) if(id==q.id){alreadyAssessed=true;break;}
     if (q.id == avoidId || alreadyAssessed) continue;
     const ProblemState* ps = problem(q.id);
@@ -243,7 +250,7 @@ bool AdaptiveCurriculum::pickLeastMasteredCurrent(const String& category, const 
   Question best;
   for (uint16_t idx : lp->indices) {
     Question q;
-    if (!_db->readAt(idx,q) || q.id == avoidId) continue;
+    if (!_db->readAt(idx,q) || q.category != category || q.id == avoidId) continue;
     const ProblemState* p = problem(q.id);
     uint32_t score = p ? ((uint32_t)p->box * 100000UL + (uint32_t)p->timesShown * 100UL + p->lastQuestion) : 0;
     if (isRecent(q.id)) score += 500000UL;

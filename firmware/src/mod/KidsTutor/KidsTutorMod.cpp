@@ -2,6 +2,7 @@
 #include <SD.h>
 #include <M5Unified.h>
 #include <Avatar.h>
+#include <esp_heap_caps.h>
 #include "KidsTutorMod.h"
 #include "mod/ModManager.h"
 #include "usage_timer.h"
@@ -41,6 +42,17 @@ bool g_voiceStartPending = false;
 TutorEngine::Subject g_voiceStartSubject = TutorEngine::Subject::Daily;
 uint32_t g_voiceStartQueuedAt = 0;
 constexpr uint32_t kVoiceStartSpeakingWaitMs = 2000;
+
+void logKidsTutorHeap(const char* stage) {
+  Serial.printf("[kids-heap] %s DMA=%u/%u INT=%u/%u PSRAM=%u/%u\n",
+                stage,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
 }
 
 KidsTutorMod::KidsTutorMod() {
@@ -63,10 +75,15 @@ bool KidsTutorMod::ensureReady(String& errOut) {
   }
 
   Serial.println("[kids] init: opening DBs");
+  logKidsTutorHeap("before DBs");
   bool okEng = g_englishDb.begin(SD, ENGLISH_DB_PATH, ENGLISH_IDX_PATH);
+  logKidsTutorHeap("after english DB");
   bool okMath = g_mathDb.begin(SD, MATH_DB_PATH, MATH_IDX_PATH);
+  logKidsTutorHeap("after math DB");
   bool okCur = g_curriculumDb.begin(SD, CURRICULUM_DB_PATH, CURRICULUM_IDX_PATH);
+  logKidsTutorHeap("after curriculum DB");
   g_math6Loaded = g_math6Db.begin(SD, MATH6_DB_PATH, MATH6_IDX_PATH);
+  logKidsTutorHeap("after math6 DB");
   sd_bus_unlock();
   Serial.printf("[kids] init: db eng=%d math=%d cur=%d math6=%d\n",
                 (int)okEng, (int)okMath, (int)okCur, (int)g_math6Loaded);
@@ -78,7 +95,7 @@ bool KidsTutorMod::ensureReady(String& errOut) {
 
   Serial.println("[kids] init: databases loaded");
   g_ui.begin();
-  if (M5.Mic.isEnabled()) M5.Mic.end();
+  if (M5.Mic.isRunning()) M5.Mic.end();
   delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
@@ -90,12 +107,14 @@ bool KidsTutorMod::ensureReady(String& errOut) {
   sd_bus_lock();
   bool learningReady = g_learning.begin(SD, g_englishDb, g_mathDb, g_curriculumDb);
   sd_bus_unlock();
+  logKidsTutorHeap("after learning manager");
   if (!learningReady) {
     errOut = "학습 설정을 읽지 못했어요.";
     return false;
   }
   g_tutor.begin(g_englishDb, g_mathDb, g_ui, g_learning, g_math6Loaded ? &g_math6Db : nullptr);
   _engineReady = true;
+  logKidsTutorHeap("ready");
   Serial.printf("[kids] ready eng=%u math=%u cur=%u math6=%d\n",
                 (unsigned)g_englishDb.size(), (unsigned)g_mathDb.size(),
                 (unsigned)g_curriculumDb.size(), (int)g_math6Loaded);
@@ -120,7 +139,7 @@ void KidsTutorMod::beginSession(TutorEngine::Subject subject) {
   }
   // Realtime has already released I2S for a deferred mode switch. End mic
   // before speaker: Speaker.end() while mic_task is in i2s_stop() panics.
-  if (M5.Mic.isEnabled()) M5.Mic.end();
+  if (M5.Mic.isRunning()) M5.Mic.end();
   delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
@@ -158,7 +177,11 @@ void KidsTutorMod::init(void) {
   uint32_t pauseStart = millis();
   while (!g_avatar_sd_paused && millis() - pauseStart < 300) delay(2);
   Serial.println("[kids] init: avatar renderer paused");
-  if (M5.Mic.isEnabled()) M5.Mic.end();
+  g_ui.begin();
+  if (!_engineReady) {
+    g_ui.showMessage("KIDS TUTOR", "공부 자료를 준비하고 있어요...\n처음 실행은 약 20초 걸려요.");
+  }
+  if (M5.Mic.isRunning()) M5.Mic.end();
   delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
@@ -187,10 +210,11 @@ void KidsTutorMod::pause(void) {
   }
   _hasPending = false;
   gesture_set_motion_hold(false);
-  if (M5.Mic.isEnabled()) M5.Mic.end();
+  if (M5.Mic.isRunning()) M5.Mic.end();
   delay(40);
   while (M5.Speaker.isPlaying()) delay(2);
   M5.Speaker.end();
+  logKidsTutorHeap("paused");
   g_avatar_render_pause = false;
   night_mode_hold_day_brightness(false);
   avatar.setSpeechText("");

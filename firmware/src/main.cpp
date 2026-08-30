@@ -19,6 +19,7 @@
 #include "TouchReaction.h"
 #include "BatteryReaction.h"
 #include "NightMode.h"
+#include "BodyLight.h"
 #include "CameraVision.h"
 #include "CameraAction.h"
 #include "MusicAction.h"
@@ -819,6 +820,7 @@ void setup()
   touch_reaction_init();
   battery_reaction_init();
   night_mode_init();
+  body_light_init();          // PY32 body WS2812 (after servo has brought PY32 up)
   roboeyes_eyecolor_init();   // 감정별 눈 그라데이션 색(SPIFFS) 로드
 
   //ヒープメモリ残量確認(デバッグ用)
@@ -852,6 +854,7 @@ void loop()
       touchConsumed = touch_reaction_tick();
       battery_reaction_tick();
       night_mode_tick();
+      body_light_tick();
     }
     camera_sensor_bus_unlock();
   }

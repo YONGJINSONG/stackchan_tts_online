@@ -30,6 +30,7 @@ namespace {
 
 enum class ActionState : uint8_t {
     Idle,
+    Centering,
     Countdown,
     Running,
     ReviewSave,
@@ -882,24 +883,39 @@ bool camera_action_request_save() {
 
     s_abandonWhenDone = false;
 
-    s_countdownDigit = 3;
+    s_countdownDigit = 0;
+    s_countdownNextMs = 0;
 
-    s_countdownNextMs =
-        millis() + 1000;
-
+    // Reserve the action before moving the servo. The countdown must not
+    // consume time while a previous gesture is still finishing.
     s_state =
-        ActionState::Countdown;
+        ActionState::Centering;
 
     unlock_action();
 
-    // Hold from the start of the countdown so expression function calls and
-    // gaze/remote tasks cannot move the head before the shutter fires.
+    // Stop queued motion and command the configured origin before displaying
+    // the countdown. The hold remains active until capture/review completes.
     gesture_set_motion_hold(true, true);
+
+    lock_action();
+
+    // The action may have been abandoned while waiting for a gesture task.
+    if (s_state != ActionState::Centering) {
+        unlock_action();
+        gesture_set_motion_hold(false);
+        return false;
+    }
+
+    s_countdownDigit = 3;
+    s_countdownNextMs = millis() + 1000;
+    s_state = ActionState::Countdown;
+
+    unlock_action();
 
     show_countdown_digit(3);
 
     Serial.println(
-        "[camera-action] save queued"
+        "[camera-action] servo at home; save queued"
     );
 
     return true;
@@ -928,6 +944,7 @@ bool camera_action_is_ui_active() {
      * 결과 소비 전이라도 카메라 화면 자체는 비활성.
      */
     return
+        state == ActionState::Centering ||
         state == ActionState::Countdown ||
         state == ActionState::Running ||
         state == ActionState::ReviewSave ||
@@ -1509,8 +1526,8 @@ void camera_action_abandon() {
     // ========================================================
 
     if (
-        s_state ==
-        ActionState::Countdown
+        s_state == ActionState::Centering ||
+        s_state == ActionState::Countdown
     ) {
         clearCountdownText =
             true;

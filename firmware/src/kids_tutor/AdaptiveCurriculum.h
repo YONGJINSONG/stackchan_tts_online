@@ -4,6 +4,7 @@
 #include <vector>
 #include "Question.h"
 #include "QuestionDB.h"
+#include "share/SpiRamStlAllocator.h"
 
 class AdaptiveCurriculum {
 public:
@@ -25,16 +26,16 @@ private:
     String category;
     uint8_t currentLevel = 1;
     uint8_t maxLevel = 1;
-    std::vector<uint8_t> freshResults;
-    std::vector<String> uniqueCurrent;
+    SpiRamVector<uint8_t> freshResults;
+    SpiRamVector<String> uniqueCurrent;
     uint32_t questionCount = 0;
     uint16_t levelChanges = 0;
   };
 
   struct LevelPool {
-    String category;
+    uint32_t categoryHash = 0;
     uint8_t level = 1;
-    std::vector<uint16_t> indices;
+    SpiRamVector<uint16_t> indices;
   };
 
   struct ProblemState {
@@ -51,10 +52,10 @@ private:
 
   fs::FS* _fs = nullptr;
   QuestionDB* _db = nullptr;
-  std::vector<TrackState> _tracks;
-  std::vector<LevelPool> _pools;
-  std::vector<ProblemState> _problems;
-  std::vector<String> _recentIds;
+  SpiRamVector<TrackState> _tracks;
+  SpiRamVector<LevelPool> _pools;
+  SpiRamVector<ProblemState> _problems;
+  SpiRamVector<String> _recentIds;
   uint32_t _sessionSerial = 0;
   uint8_t _dirty = 0;
 
@@ -72,6 +73,7 @@ private:
   TrackState* track(const String& category);
   LevelPool* levelPool(const String& category, uint8_t level);
   const LevelPool* levelPool(const String& category, uint8_t level) const;
+  LevelPool* levelPool(uint32_t categoryHash, uint8_t level);
   void buildPools();
   const TrackState* track(const String& category) const;
   ProblemState* problem(const String& id);
