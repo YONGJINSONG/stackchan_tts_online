@@ -6,6 +6,7 @@
 #include "StackchanExConfig.h" 
 #include "MCPClient.h"
 #include "llm/LLMBase.h"
+#include "agent/AgentBridgeClient.h"
 
 //#define USE_EXTENSION_FUNCTIONS
 
@@ -38,14 +39,21 @@ private:
     MCPClient** _mcpClient;
     bool _modeSwitchRequested;
     bool _deferredActionRequested;
+    bool _deferAgentBridge;
+    AgentBridgeClient _agentBridge;
+
+    AgentBridgeConfig getAgentBridgeConfig() const;
 
 public:
-    FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient = nullptr);
+    FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient = nullptr,
+                 bool deferAgentBridge = false);
 
     void init_func_call_settings(StackchanExConfig& system_config);
     String exec_calledFunc(const char* name, const char* args);
     bool consumeModeSwitchRequest();
     bool consumeDeferredActionRequest();
+    bool takeDeferredAgentResult(String& result);
+    void abandonDeferredAgent();
     
 
     // Functions for Function Calling

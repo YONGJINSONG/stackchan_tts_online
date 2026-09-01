@@ -16,6 +16,7 @@
 #include "DiagLog.h"
 #include "CameraAction.h"
 #include "MusicAction.h"
+#include "share/JsonStringUtil.h"
 
 #include <base64.h>
 #include <esp_heap_caps.h>
@@ -190,6 +191,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             if (p_this->hasDeferredFunctionCall) {
                 camera_action_abandon();
                 music_action_abandon();
+                p_this->fnCall->abandonDeferredAgent();
                 p_this->hasDeferredFunctionCall = false;
                 p_this->deferredFunctionCallId = "";
                 Serial.println("[camera-action] deferred call abandoned on disconnect");
@@ -369,7 +371,11 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                         const char* name = p_this->msgDoc["response"]["output"][i]["name"];
                         const char* args = p_this->msgDoc["response"]["output"][i]["arguments"];
                         const char* call_id = p_this->msgDoc["response"]["output"][i]["call_id"];
-                        Serial.printf("name: %s, args: %s\n", name, args);
+                        if (name && strcmp(name, "agent_task") == 0) {
+                            Serial.println("name: agent_task, args: [redacted]");
+                        } else {
+                            Serial.printf("name: %s, args: %s\n", name, args);
+                        }
 
                         //avatar.setSpeechFont(&fonts::efontJA_12);
                         //avatar.setSpeechText(name);
@@ -397,6 +403,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 if (modeSwitchRequested && deferredActionRequested) {
                     camera_action_abandon();
                     music_action_abandon();
+                    p_this->fnCall->abandonDeferredAgent();
                     String response = "{\\\"error\\\":\\\"mode switch cancelled the camera request\\\"}";
                     String json(conversation_item_create);
                     json.replace("REPLACE_TO_CALL_ID", p_this->deferredFunctionCallId);
@@ -528,7 +535,7 @@ RealtimeChatGPT::RealtimeChatGPT(llm_param_t param)
   msgDoc = SpiRamJsonDocument(1024*150);
   
   initMcpClientList(mcpClient, param.llm_conf.mcpServer, param.llm_conf.nMcpServers);
-  fnCall = new FunctionCall(param, this, mcpClient);
+  fnCall = new FunctionCall(param, this, mcpClient, true);
   //fnCall->init_func_call_settings(robot->m_config);
 
   if(proactiveMux == NULL) proactiveMux = xSemaphoreCreateMutex();
@@ -732,12 +739,15 @@ void RealtimeChatGPT::onWebSocketTick() {
   // called concurrently with webSocket.loop().
   if (hasDeferredFunctionCall) {
     String result;
-    if (camera_action_take_result(result) || music_action_take_result(result)) {
-      result.replace("\"", "\\\"");
+    if (camera_action_take_result(result)
+        || music_action_take_result(result)
+        || fnCall->takeDeferredAgentResult(result)) {
+      result = json_escape_string_content(result);
       String json(conversation_item_create);
       json.replace("REPLACE_TO_CALL_ID", deferredFunctionCallId);
       json.replace("REPLACE_TO_OUTPUT", result);
-      Serial.printf("[WSc] deferred function output: %s\n", json.c_str());
+      Serial.printf("[WSc] deferred function output ready (%u bytes)\n",
+                    static_cast<unsigned>(json.length()));
       if (!sendTextChecked("deferred_function_output", json)) return;
       hasDeferredFunctionCall = false;
       deferredFunctionCallId = "";
@@ -769,8 +779,16 @@ void RealtimeChatGPT::onWebSocketTick() {
   // otherwise two responses can race for the single speaker I2S peripheral.
   if (t != 0) return;
 
-  // (2) Drain a queued proactive utterance.
+  // (2) Drain a queued proactive utterance. Never let an idle/battery/touch
+  // reaction interrupt a user listen request or race session.update during a
+  // reconnect. Keep it queued until the live conversation is genuinely idle.
   if (!hasPendingProactive) return;
+  if (!isRealtimeSessionReady()
+      || isRealtimeRecording()
+      || isRealtimeRecordRequested()
+      || isSpeaking()) {
+    return;
+  }
 
   String text;
   if (proactiveMux) xSemaphoreTake(proactiveMux, portMAX_DELAY);

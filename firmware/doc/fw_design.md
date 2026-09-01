@@ -22,6 +22,7 @@ Notes on FW design, etc.
 | battery_check | Battery level check | 2048 | 1 |
 | asyncTtsStreamTask | TTS streaming play | 5 * 1024 | 2 |
 | webSocketLoopTask | WebSocket processing for LLM Realtime API | 6 * 1024 | 3 |
+| agent_bridge | OpenClaw PC Bridge HTTP request (only while an agent tool is pending) | 12 * 1024 | 1 |
 
 ## ESP-NOW Remote Control Mod
 
@@ -56,6 +57,17 @@ Kids Tutor stores its long-lived database metadata in PSRAM-backed vectors. Each
 Realtime defers proactive battery, idle, touch, and proximity responses while a camera or music function is pending and while another response is in flight. This prevents a second response from reclaiming the single I2S peripheral during shutter playback or camera DMA setup.
 
 ## Realtime API Function Calling
+
+### OpenClaw Agent Bridge
+
+`agent_task` delegates diary, PC-side long-term memory, multi-source search, and shopping comparison requests to a LAN PC without replacing the selected LLM. Robot-local functions such as movement, lights, camera, music, study, and timers remain in `FunctionCall`.
+
+- Configuration and the Bridge authentication key are read from SD `/yaml/SC_SecConfig.yaml` under `agentBridge`; the OpenClaw token is never stored on the device.
+- `StackchanExConfig` bypasses the upstream raw-secret dump and logs only whether secret fields are configured.
+- The request is `POST http://<host>:<port>/v1/agent` with `X-Stackchan-Key` and JSON `profile`, `device_id`, `action`, and `text`. A successful response is HTTP 200 with a `text` field.
+- RealtimeChatGPT starts a low-priority single-flight worker and returns its result through the existing deferred function-call path. The WebSocket task continues processing while HTTP is pending. Disconnect or cancellation advances the request generation so a late result is discarded.
+- Non-Realtime ChatGPT and Gemini use the same client synchronously. Connect and response timeouts are 5 and 60 seconds respectively.
+- Request arguments, response bodies, diary/memory content, and authentication values are not written to Serial.
 
 ### Avatar Expression
 

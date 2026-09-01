@@ -56,12 +56,22 @@
 #define WAKEWORD_TYPE_MODULE_LLM_KWS    1
 
 
+typedef struct AgentBridgeConf {
+    bool enabled = false;
+    String host = "";
+    uint16_t port = 8765;
+    String profile = "kids";
+    String deviceId = "roni";
+    String key = "";
+} agent_bridge_s;
+
 typedef struct LLMConf {
     int type;
     String model = "";
     int nMcpServers;
     mcp_server_s mcpServer[LLM_N_MCP_SERVERS_MAX];
     bool enableMemory;
+    agent_bridge_s agentBridge;
 } llm_s;
 
 typedef struct TTSConf {
@@ -111,6 +121,11 @@ class StackchanExConfig : public StackchanSystemConfig
         StackchanExConfig();
         ~StackchanExConfig();
 
+        // The upstream loader can print the complete secret YAML. Keep the same
+        // public entry point, but load secrets through our redacted parser.
+        void loadConfig(fs::FS& fs, const char *app_yaml_filename, uint32_t app_yaml_filesize=2048,
+                        const char* secret_yaml_filename = "/yaml/SC_SecConfig.yaml", uint32_t secret_yaml_filesize=2048,
+                        const char* basic_yaml_filename = "/yaml/SC_BasicConfig.yaml", uint32_t basic_yaml_filesize=2048);
         void loadExtendConfig(fs::FS& fs, const char *yaml_filename, uint32_t yaml_size) override;
         void setExtendSettings(DynamicJsonDocument doc) override;
         void printExtParameters(void) override;
@@ -122,6 +137,8 @@ class StackchanExConfig : public StackchanSystemConfig
         void secretConfigNotFoundCallback(void) override;
         void extendConfigNotFoundCallback(void);
 
+    private:
+        void loadSecretConfigSafe(fs::FS& fs, const char* yaml_filename, uint32_t yaml_size);
 };
 
 

@@ -312,7 +312,11 @@ String ChatGPT::execChatGpt(String json_string, String& calledFunc) {
   String ret = https_post_json("https://api.openai.com/v1/chat/completions", json_string.c_str(), root_ca_openai);
   avatar.setExpression(Expression::Neutral);
   avatar.setSpeechText("");
-  Serial.println(ret);
+  if (ret.indexOf("\"agent_task\"") >= 0) {
+    Serial.println("[AgentBridge] ChatGPT function arguments redacted");
+  } else {
+    Serial.println(ret);
+  }
 
   if (ret.startsWith("__HTTP_")) {
     avatar.setExpression(Expression::Sad);

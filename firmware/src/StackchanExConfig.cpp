@@ -4,6 +4,79 @@
 StackchanExConfig::StackchanExConfig() {};
 StackchanExConfig::~StackchanExConfig() {};
 
+void StackchanExConfig::loadConfig(fs::FS& fs, const char *app_yaml_filename, uint32_t app_yaml_filesize,
+                                   const char* secret_yaml_filename, uint32_t secret_yaml_filesize,
+                                   const char* basic_yaml_filename, uint32_t basic_yaml_filesize)
+{
+    // A zero secret size makes the upstream loader skip its unredacted secret
+    // dump. Load the same Wi-Fi/API fields plus Agent Bridge below instead.
+    StackchanSystemConfig::loadConfig(fs, app_yaml_filename, app_yaml_filesize,
+                                     secret_yaml_filename, 0,
+                                     basic_yaml_filename, basic_yaml_filesize);
+    if (secret_yaml_filesize > 0) {
+        loadSecretConfigSafe(fs, secret_yaml_filename, secret_yaml_filesize);
+    }
+}
+
+void StackchanExConfig::loadSecretConfigSafe(fs::FS& fs, const char* yaml_filename, uint32_t yaml_size)
+{
+    M5_LOGI("----- StackchanExConfig::loadSecretConfigSafe:%s", yaml_filename);
+    File file = fs.open(yaml_filename);
+    if (!file) {
+        secretConfigNotFoundCallback();
+        return;
+    }
+
+    DynamicJsonDocument doc(yaml_size);
+    DeserializationError err = deserializeYml(doc, file);
+    file.close();
+    if (err) {
+        M5_LOGE("secret yaml read error: %s", err.c_str());
+        secretConfigNotFoundCallback();
+        return;
+    }
+
+    // Preserve the upstream Wi-Fi and AI service key behavior.
+    setSecretConfig(doc);
+
+    JsonObject bridge = doc["agentBridge"];
+    agent_bridge_s& cfg = _ex_parameters.llm.agentBridge;
+    cfg.enabled = bridge["enabled"] | false;
+    cfg.host = bridge["host"] | "";
+    int port = bridge["port"] | 8765;
+    cfg.profile = bridge["profile"] | "kids";
+    cfg.deviceId = bridge["deviceId"] | "roni";
+    cfg.key = bridge["key"] | "";
+
+    cfg.host.trim();
+    cfg.profile.trim();
+    cfg.deviceId.trim();
+    cfg.key.trim();
+    if (cfg.deviceId.length() == 0) cfg.deviceId = "roni";
+
+    bool validProfile = cfg.profile == "kids" || cfg.profile == "adult";
+    bool validPort = port > 0 && port <= 65535;
+    if (!validProfile || !validPort) {
+        cfg.enabled = false;
+        if (!validProfile) M5_LOGE("agentBridge profile must be kids or adult");
+        if (!validPort) M5_LOGE("agentBridge port is invalid");
+    }
+    cfg.port = validPort ? static_cast<uint16_t>(port) : 8765;
+
+    M5_LOGI("wifi ssid configured: %s", _secret_config.wifi_info.ssid.length() ? "yes" : "no");
+    M5_LOGI("AI service keys configured: stt=%s ai=%s tts=%s",
+            _secret_config.api_key.stt.length() ? "yes" : "no",
+            _secret_config.api_key.ai_service.length() ? "yes" : "no",
+            _secret_config.api_key.tts.length() ? "yes" : "no");
+    M5_LOGI("agentBridge: enabled=%s host=%s port=%u profile=%s deviceId=%s key=%s",
+            cfg.enabled ? "true" : "false",
+            cfg.host.c_str(),
+            static_cast<unsigned>(cfg.port),
+            cfg.profile.c_str(),
+            cfg.deviceId.c_str(),
+            cfg.key.length() ? "configured" : "missing");
+}
+
 
 void StackchanExConfig::basicConfigNotFoundCallback(void)
 {
@@ -56,22 +129,22 @@ void StackchanExConfig::secretConfigNotFoundCallback(void)
 
         read_line_from_buf(nullptr, data);
         _secret_config.wifi_info.password = String(data);
-        Serial.printf("Key: %s\n",data);
+        Serial.printf("WiFi key configured: %s\n", data[0] ? "yes" : "no");
     }
 
     /// apikey
     if(read_sd_file("/apikey.txt", buf, sizeof(buf))){
         read_line_from_buf(buf, data);
         _secret_config.api_key.ai_service = String(data);
-        Serial.printf("openai: %s\n",data);
+        Serial.printf("openai configured: %s\n", data[0] ? "yes" : "no");
 
         read_line_from_buf(nullptr, data);
         _secret_config.api_key.tts = String(data);
-        Serial.printf("voicevox: %s\n",data);
+        Serial.printf("tts configured: %s\n", data[0] ? "yes" : "no");
 
         read_line_from_buf(nullptr, data);
         _secret_config.api_key.stt = String(data);
-        Serial.printf("stt: %s\n",data);
+        Serial.printf("stt configured: %s\n", data[0] ? "yes" : "no");
     }
 }
 
@@ -152,6 +225,7 @@ void StackchanExConfig::printExtParameters(void)
         M5_LOGI("llm mcpServer[%d] port: %d", i, _ex_parameters.llm.mcpServer[i].port);
     }
     M5_LOGI("llm enableMemory: %s", _ex_parameters.llm.enableMemory ? "true":"false");
+    M5_LOGI("llm agentBridge enabled: %s", _ex_parameters.llm.agentBridge.enabled ? "true":"false");
 
 
     M5_LOGI("tts type: %d", _ex_parameters.tts.type);

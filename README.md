@@ -80,6 +80,26 @@ SD카드 설정은 `Copy-to-SD/` 내용을 카드 루트에 복사한 뒤 채운
 
 Google Cloud TTS는 [Text-to-Speech API](https://cloud.google.com/text-to-speech)를 켠 뒤 API 키를 `apikey.tts`에 넣는다.
 
+### OpenClaw PC Bridge
+
+기존 LLM과 로봇의 로컬 Function Calling을 유지하면서 일기, PC 장기 기억, 복합 검색, 상품 비교만 OpenClaw에 위임할 수 있다. PC Bridge의 `/health`가 다른 PC나 휴대폰에서 열리는 것을 먼저 확인한 뒤, SD 카드 `/yaml/SC_SecConfig.yaml`에 다음을 추가한다.
+
+```yaml
+agentBridge:
+  enabled: true
+  host: "192.168.0.20"  # PC의 LAN IPv4
+  port: 8765
+  profile: "kids"       # kids 또는 adult
+  deviceId: "roni"
+  key: "********"       # PC Bridge의 X-Stackchan-Key 값
+```
+
+- `host`에 `127.0.0.1`, `localhost`, `http://` 접두사를 넣지 않는다.
+- PC 주소가 바뀌지 않도록 공유기에서 DHCP 주소를 예약하는 것을 권장한다.
+- 이 key는 OpenClaw token이 아니다. OpenClaw token은 PC에만 보관한다.
+- 설정 템플릿은 `Copy-to-SD/yaml/SC_SecConfig.yaml`이며, 실제 key는 저장소에 커밋하지 않는다.
+- 연결을 끄려면 `enabled: false`로 바꾸거나 `agentBridge` 블록을 제거한다.
+
 ### 공부 프로그램 쓰는 법
 
 음성으로 「공부하자」「영어 하자」「수학」이라고 하거나, 웹 설정 → **공부 프로그램**에서 버튼을 누르면 KidsTutor 모드로 들어간다.

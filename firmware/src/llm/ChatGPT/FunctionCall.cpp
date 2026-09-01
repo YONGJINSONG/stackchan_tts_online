@@ -58,7 +58,7 @@ const String json_Functions =
 "["
   "{"
     "\"name\": \"update_memory\","
-    "\"description\": \"Update long-term memory.\","
+    "\"description\": \"로봇 내부 대화 메모리에 사용자 특성과 기억할 대화 요약을 저장한다. 일기 작성·읽기나 PC의 OpenClaw 장기 기억에는 사용하지 않는다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
@@ -68,6 +68,18 @@ const String json_Functions =
         "}"
       "},"
       "\"required\": [\"memory\"]"
+    "}"
+  "},"
+  "{"
+    "\"name\": \"agent_task\","
+    "\"description\": \"PC의 OpenClaw agent가 필요한 작업을 수행한다. 일기 작성·읽기, PC 장기 기억, 여러 자료를 이용한 검색, 상품 검색·비교에만 사용한다. 단순 사실 검색은 web_search를 사용하고 춤, 조명, 사진, 음악, 공부, 타이머 등 로봇 자체 동작에는 사용하지 않는다.\","
+    "\"parameters\": {"
+      "\"type\":\"object\","
+      "\"properties\": {"
+        "\"action\":{ \"type\": \"string\", \"enum\": [\"diary\", \"search\", \"shopping\", \"memory\"] },"
+        "\"text\":{ \"type\": \"string\", \"description\": \"OpenClaw agent에게 전달할 사용자의 전체 요청\" }"
+      "},"
+      "\"required\": [\"action\", \"text\"]"
     "}"
   "},"
   "{"
@@ -254,7 +266,7 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"web_search\","
-    "\"description\": \"아이가 사실 정보를 묻거나 검색해 달라고 하거나, 최신 정보가 필요할 때 호출한다. SafeSearch strict가 항상 적용된다.\","
+    "\"description\": \"간단한 사실 확인이나 단발성 최신 검색에 사용한다. SafeSearch strict가 항상 적용된다. 여러 자료를 종합하거나 상품을 비교하는 요청은 agent_task를 사용한다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
@@ -371,14 +383,28 @@ void powerOffTimerCallback(TimerHandle_t _xTimer){
 }
 
 
-FunctionCall::FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient)
+FunctionCall::FunctionCall(llm_param_t param, LLMBase* llm, MCPClient** mcpClient,
+                           bool deferAgentBridge)
   : _param(param),
     _llm(llm),
     _mcpClient(mcpClient),
     _modeSwitchRequested(false),
-    _deferredActionRequested(false)
+    _deferredActionRequested(false),
+    _deferAgentBridge(deferAgentBridge)
 {
 
+}
+
+AgentBridgeConfig FunctionCall::getAgentBridgeConfig() const {
+  const agent_bridge_s& source = _param.llm_conf.agentBridge;
+  AgentBridgeConfig cfg;
+  cfg.enabled = source.enabled;
+  cfg.host = source.host;
+  cfg.port = source.port;
+  cfg.profile = source.profile;
+  cfg.deviceId = source.deviceId;
+  cfg.key = source.key;
+  return cfg;
 }
 
 // Function Call関連の初期化
@@ -394,9 +420,13 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
   _deferredActionRequested = false;
 
   Serial.println(name);
-  Serial.println(args);
+  if (strcmp(name, "agent_task") == 0) {
+    Serial.println("[AgentBridge] arguments redacted");
+  } else {
+    Serial.println(args);
+  }
 
-  DynamicJsonDocument argsDoc(256);
+  SpiRamJsonDocument argsDoc(2048);
   DeserializationError error = deserializeJson(argsDoc, args);
   if (error) {
     Serial.print(F("deserializeJson(arguments) failed: "));
@@ -423,7 +453,20 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       }
     }
 
-    if(strcmp(name, "update_memory") == 0){
+    if(strcmp(name, "agent_task") == 0){
+      String action = argsDoc["action"] | "";
+      String text = argsDoc["text"] | "";
+      if (_deferAgentBridge) {
+        if (_agentBridge.start(getAgentBridgeConfig(), action, text)) {
+          _deferredActionRequested = true;
+        } else {
+          response = "OpenClaw가 이전 요청을 처리하고 있어요. 잠시 뒤 다시 말해 주세요.";
+        }
+      } else {
+        response = _agentBridge.call(getAgentBridgeConfig(), action, text);
+      }
+    }
+    else if(strcmp(name, "update_memory") == 0){
       const char* memory = argsDoc["memory"];
       Serial.println(memory);
       response = fn_update_memory(_llm, memory);
@@ -569,6 +612,14 @@ bool FunctionCall::consumeDeferredActionRequest() {
   bool requested = _deferredActionRequested;
   _deferredActionRequested = false;
   return requested;
+}
+
+bool FunctionCall::takeDeferredAgentResult(String& result) {
+  return _agentBridge.takeResult(result);
+}
+
+void FunctionCall::abandonDeferredAgent() {
+  _agentBridge.abandon();
 }
 
 

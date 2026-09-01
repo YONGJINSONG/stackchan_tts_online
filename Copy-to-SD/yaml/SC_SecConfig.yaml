@@ -11,3 +11,12 @@ apikey:
   tts: "********"       # Google Cloud TTS API Key (Text-to-Speech API 사용)
   search: "********"    # (선택) Brave Search API Key. 웹 검색 도구용
   nexusive: "********"  # (선택) Nexusive 할일/일정 연동
+
+# PC OpenClaw Bridge. OpenClaw token은 PC에만 두고 여기에는 Bridge key만 넣습니다.
+agentBridge:
+  enabled: false
+  host: "192.168.0.20"  # PC의 LAN IPv4. 127.0.0.1 사용 금지
+  port: 8765
+  profile: "kids"       # kids 또는 adult
+  deviceId: "roni"
+  key: "********"       # PC Bridge의 X-Stackchan-Key 값

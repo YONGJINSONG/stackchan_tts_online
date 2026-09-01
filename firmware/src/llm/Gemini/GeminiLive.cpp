@@ -10,6 +10,7 @@
 #include <ArduinoJson.h>
 #include "SpiRamJsonDocument.h"
 #include "GeminiLive.h"
+#include "share/JsonStringUtil.h"
 #include "../ChatGPT/FunctionCall.h"    // GeminiとChatGPTのFunction Calling仕様は共通
 //#include "MCPClient.h"
 #include "Robot.h"
@@ -242,21 +243,29 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             #endif
 #endif
             else if(!p_this->msgDoc["toolCall"]["functionCalls"][0].isNull()){
-                Serial.printf("[WSc] toolCall: %s\n", payload);
-
                 String name = p_this->msgDoc["toolCall"]["functionCalls"][0]["name"].as<String>();
                 String args = p_this->msgDoc["toolCall"]["functionCalls"][0]["args"].as<String>();
                 String call_id = p_this->msgDoc["toolCall"]["functionCalls"][0]["id"].as<String>();
-                Serial.printf("name: %s, args: %s, id: %s\n", name.c_str(), args.c_str(), call_id.c_str());
+                if (name == "agent_task") {
+                    Serial.printf("name: agent_task, args: [redacted], id: %s\n", call_id.c_str());
+                } else {
+                    Serial.printf("[WSc] toolCall: %s\n", payload);
+                    Serial.printf("name: %s, args: %s, id: %s\n", name.c_str(), args.c_str(), call_id.c_str());
+                }
 
                 String response = p_this->fnCall->exec_calledFunc(name.c_str(), args.c_str());
-                response.replace("\"", "\\\"");     //JSON内の文字列を囲む"にエスケープ(\)を付ける
+                response = json_escape_string_content(response);
 
                 String json(function_response);
                 json.replace("REPLACE_TO_TOOL_NAME", name.c_str());
                 json.replace("REPLACE_TO_CALL_ID", call_id.c_str());
                 json.replace("REPLACE_TO_OUTPUT", response.c_str());
-                Serial.printf("[WSc] function output: %s\n", json.c_str());
+                if (name == "agent_task") {
+                    Serial.printf("[WSc] agent function output ready (%u bytes)\n",
+                                  static_cast<unsigned>(json.length()));
+                } else {
+                    Serial.printf("[WSc] function output: %s\n", json.c_str());
+                }
                 p_this->webSocket.sendTXT(json);
             }
             else if(!p_this->msgDoc["serverContent"]["turnComplete"].isNull()){

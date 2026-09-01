@@ -182,10 +182,27 @@ void RealtimeAiMod::display_touched(int16_t x, int16_t y)
     // mutex. Blocking here for the tap tone freezes the main loop, so no
     // later touch (including Kids Tutor controls) can be processed. Queue the
     // listen request silently; RealtimeListenState starts it when ready.
-    if (pRtLLM->isRealtimeSessionReady()) {
+    const bool sessionReady = pRtLLM->isRealtimeSessionReady();
+    const bool listenRequested = pRtLLM->isRealtimeRecordRequested();
+    // The reply currently owns the speaker/I2S path. Playing the tap tone or
+    // toggling the queued listen here can tear down the live TLS stream.
+    if (pRtLLM->isSpeaking()) {
+      avatar.setSpeechText("답변 중...");
+      Serial.println("[realtime] tap ignored while response is speaking");
+      return;
+    }
+    if (sessionReady) {
       sw_tone();
     } else {
       Serial.println("[realtime] tap before session ready; queuing without tone");
+      // A queued listen starts automatically after session.updated. Repeated
+      // taps while reconnecting used to toggle that request back off, which
+      // made a healthy touch panel look intermittent to the user.
+      if (listenRequested) {
+        avatar.setSpeechText("연결 중...");
+        Serial.println("[realtime] listen already queued; repeated tap ignored");
+        return;
+      }
     }
     toggleRealtimeRecord();
     Serial.printf("[realtime] recording=%d requested=%d ready=%d\n",
