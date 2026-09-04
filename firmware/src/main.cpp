@@ -111,6 +111,12 @@ const Expression expressions_table[] = {
 };
 
 FtpServer ftpSrv;   //set #define FTP_DEBUG in ESP8266FtpServer.h to see ftp verbose on serial
+static uint32_t g_bootStartedMs = 0;
+static bool g_ntpReady = false;
+
+static void boot_stage(const char* name) {
+  Serial.printf("[boot] stage=%s elapsed_ms=%u\n", name, (unsigned)(millis() - g_bootStartedMs));
+}
 
 
 void lipSync(void *args)
@@ -257,23 +263,24 @@ bool Wifi_connection_check() {
 }
 
 void time_sync(const char* ntpsrv, long gmt_offset, int daylight_offset) {
-  struct tm timeInfo; 
-  char buf[60];
+  configTime(gmt_offset, daylight_offset, ntpsrv);
+  g_ntpReady = false;
+  Serial.printf("[boot] NTP scheduled server=%s\n", ntpsrv);
+}
 
-  configTime(gmt_offset, daylight_offset, ntpsrv);          // NTPサーバと同期
-
-  if (getLocalTime(&timeInfo)) {                            // timeinfoに現在時刻を格納
-    Serial.print("NTP : ");                                 // シリアルモニターに表示
-    Serial.println(ntpsrv);                                 // シリアルモニターに表示
-
-    sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d\n",     // 表示内容の編集
-    timeInfo.tm_year + 1900, timeInfo.tm_mon + 1, timeInfo.tm_mday,
-    timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
-
-    Serial.println(buf);                                    // シリアルモニターに表示
-  }
-  else {
-    Serial.print("NTP Sync Error ");                        // シリアルモニターに表示
+static void time_sync_poll() {
+  if (g_ntpReady || WiFi.status() != WL_CONNECTED) return;
+  static uint32_t nextPollMs = 0;
+  uint32_t now = millis();
+  if ((int32_t)(now - nextPollMs) < 0) return;
+  nextPollMs = now + 1000;
+  struct tm timeInfo;
+  if (getLocalTime(&timeInfo, 0)) {
+    g_ntpReady = true;
+    Serial.printf("[boot] NTP ready elapsed_ms=%u time=%04d-%02d-%02dT%02d:%02d:%02d\n",
+                  (unsigned)(millis() - g_bootStartedMs),
+                  timeInfo.tm_year + 1900, timeInfo.tm_mon + 1, timeInfo.tm_mday,
+                  timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
   }
 }
 
@@ -588,6 +595,7 @@ static bool mountSettingsSdCard()
 
 void setup()
 {
+  g_bootStartedMs = millis();
   auto cfg = M5.config();
 
 #if defined(ARDUINO_M5STACK_ATOMS3R)
@@ -597,6 +605,19 @@ void setup()
 #endif
   cfg.serial_baudrate = 115200;   //M5Unified 0.1.17からデフォルトが0になったため設定
   M5.begin(cfg);
+  boot_stage("m5_ready");
+  Serial.printf("[boot] power pmic=%d battery_pct=%d battery_mv=%d battery_ma=%ld vbus_mv=%d charging=%d\n",
+                (int)M5.Power.getType(),
+                (int)M5.Power.getBatteryLevel(),
+                (int)M5.Power.getBatteryVoltage(),
+                (long)M5.Power.getBatteryCurrent(),
+                (int)M5.Power.getVBUSVoltage(),
+                (int)M5.Power.isCharging());
+#if defined(ENABLE_CAMERA)
+  Serial.println("[boot] camera=enabled tool=take_photo");
+#else
+  Serial.println("[boot] camera=disabled tool=unavailable diagnostic_build=1");
+#endif
 
   /// シリアル出力のログレベルを VERBOSEに設定
   //M5.Log.setLogLevel(m5::log_target_serial, ESP_LOG_VERBOSE);
@@ -636,6 +657,7 @@ void setup()
                                      "/SC_BasicConfig.yaml", 2048);
 #else
   if (mountSettingsSdCard()) {
+    boot_stage("sd_ready");
     // この関数ですべてのYAMLファイル(Basic, Secret, Extend)を読み込む
     system_config.loadConfig(SD, "/app/AiStackChanEx/SC_ExConfig.yaml");
 #endif
@@ -695,6 +717,7 @@ void setup()
       ftpSrv.begin("stackchan","stackchan");    //username, password for ftp.  set ports in ESP8266FtpServer.h  (default 21, 50009 for PASV)
       Serial.println("FTP server started");
       M5.Lcd.println("FTP server started");
+      boot_stage("wifi_services_ready");
 
       //時刻同期
       time_sync(NTPSRV, GMT_OFFSET, DAYLIGHT_OFFSET);
@@ -827,15 +850,21 @@ void setup()
   check_heap_free_size();
   check_heap_largest_free_block();
 
-  // Boot sound effect (SD), if the "boot" event has a sound bound. Last, so init
-  // finishes fast before the (blocking) playback.
-  sfx_play_event("boot");
+  // setup() is about to return, so main-loop touch handling is now available.
+  avatar.setSpeechText("연결 중 · 터치하면 대기");
+  boot_stage("ui_ready");
+  Serial.printf("[boot] ui_ready_ms=%u\n", (unsigned)(millis() - g_bootStartedMs));
+
+  // Do not hold setup (and therefore touch input) while the boot MP3 plays.
+  sfx_play_event_async("boot");
+  boot_stage("setup_complete");
 }
 
 
 
 void loop()
 {
+  time_sync_poll();
   //get_elapsed_time_micro("loop() start");
   bool cameraBusy = camera_is_busy();
   //get_elapsed_time_micro("M5.update time");

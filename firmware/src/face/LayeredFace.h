@@ -31,6 +31,10 @@ private:
     EYE_SAD,
     EYE_SLEEPY,
     EYE_SURPRISED,
+    EYE_CLOSED,
+    EYE_LEFT,
+    EYE_PUZZLED,
+    EYE_RIGHT,
     EYE_COUNT
   };
   enum MouthId {
@@ -43,7 +47,7 @@ private:
     MOUTH_OPEN2,
     MOUTH_COUNT
   };
-  enum BlushId { BLUSH_NONE = -1, BLUSH_NORMAL = 0, BLUSH_SHY, BLUSH_COUNT };
+  enum BlushId { BLUSH_NONE = -1, BLUSH_NORMAL = 0, BLUSH_SHY, BLUSH_PET, BLUSH_COUNT };
   enum FxId { FX_NONE = -1, FX_TEAR = 0, FX_ZZZ, FX_COUNT };
 
   // Magenta chroma key for transparent areas (not used in art outlines).
@@ -75,7 +79,8 @@ private:
   void freeSprite(M5Canvas*& spr);
   void freeLayer(LayerSprite& layer);
   void loadAll();
-  void pickLayers(m5avatar::Expression e, float mouthOpen,
+  void pickLayers(m5avatar::Expression e, float mouthOpen, float eyeOpen,
+                  float gazeHorizontal,
                   EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx);
   void ensureComposite(int w, int h);
   void rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx);

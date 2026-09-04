@@ -44,6 +44,7 @@ void StackchanExConfig::loadSecretConfigSafe(fs::FS& fs, const char* yaml_filena
     cfg.enabled = bridge["enabled"] | false;
     cfg.host = bridge["host"] | "";
     int port = bridge["port"] | 8765;
+    cfg.tls = bridge["tls"] | false;
     cfg.profile = bridge["profile"] | "kids";
     cfg.deviceId = bridge["deviceId"] | "roni";
     cfg.key = bridge["key"] | "";
@@ -68,10 +69,11 @@ void StackchanExConfig::loadSecretConfigSafe(fs::FS& fs, const char* yaml_filena
             _secret_config.api_key.stt.length() ? "yes" : "no",
             _secret_config.api_key.ai_service.length() ? "yes" : "no",
             _secret_config.api_key.tts.length() ? "yes" : "no");
-    M5_LOGI("agentBridge: enabled=%s host=%s port=%u profile=%s deviceId=%s key=%s",
+    M5_LOGI("agentBridge: enabled=%s host=%s port=%u tls=%s profile=%s deviceId=%s key=%s",
             cfg.enabled ? "true" : "false",
             cfg.host.c_str(),
             static_cast<unsigned>(cfg.port),
+            cfg.tls ? "true" : "false",
             cfg.profile.c_str(),
             cfg.deviceId.c_str(),
             cfg.key.length() ? "configured" : "missing");

@@ -14,6 +14,7 @@
 
 void sfx_init();
 bool sfx_play_event(const char* event);   // auto-trigger: play the sound bound to this event
+bool sfx_play_event_async(const char* event); // boot-safe background playback
 bool sfx_play_name(const char* name);      // voice: fuzzy match by name, then play (즉시)
 bool sfx_play_file(const char* file);      // low-level: play a specific file (test / resolved)
 

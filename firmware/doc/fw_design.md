@@ -22,7 +22,7 @@ Notes on FW design, etc.
 | battery_check | Battery level check | 2048 | 1 |
 | asyncTtsStreamTask | TTS streaming play | 5 * 1024 | 2 |
 | webSocketLoopTask | WebSocket processing for LLM Realtime API | 6 * 1024 | 3 |
-| agent_bridge | OpenClaw PC Bridge HTTP request (only while an agent tool is pending) | 12 * 1024 | 1 |
+| agent_bridge | OpenClaw PC Bridge HTTP/HTTPS request (only while an agent tool is pending) | 12 * 1024 | 1 |
 
 ## ESP-NOW Remote Control Mod
 
@@ -40,6 +40,22 @@ Notes on FW design, etc.
 
 ## CoreS3 Camera and Official Stack-chan Servo
 
+### Pet blush and dizzy reaction
+
+Touch-stroke and normal IMU pet reactions use a three-second `PetReaction`
+blush timer. LayeredFace prefers the larger, saturated `blush_pet` overlay and
+falls back to `blush_shy` (then its ellipse fallback), so older SD cards remain
+usable. The firmware also carries a small recovery copy of `blush_pet.png` and
+creates the SD file only when it is missing; an existing customized file is
+never overwritten. The 25 Hz IMU poll classifies a deliberate shake by dominant-axis sign
+changes instead of raw movement energy. At the default `shakeSensitivity: 6`,
+three alternating peaks above about 190 deg/s (two reversals) must occur within
+800 ms, and each peak must first fall below 45 percent of threshold to re-arm.
+The reaction has a three-second cooldown and displays `eye_puzzled` for 2.5
+seconds ahead of blink; if that asset is absent it explicitly falls back to the
+surprised eye. Speech, gestures, and camera operation reset/suppress the shake
+classifier so speaker vibration and robot motion cannot self-trigger it.
+
 The official CoreS3 Stack-chan profile uses `M5_SCS` servos through the PY32 controller at I2C address `0x6F`. Serial2 uses RX/TX pins 7/6, and servo IDs 1 and 2 control the X/Y axes. CoreS3 GPIO remapping, PWM reattachment, and hard-sweep diagnostics are restricted to the PWM servo type. ESP-NOW movement uses the configured center and limits through `ServoCustom::writeOffset`.
 
 The CoreS3 GC0308 camera uses the board-provided external XCLK (`pin_xclk = -1`) and borrows the already-running `M5.In_I2C` port for SCCB. Camera sessions must not release, reinstall, or restart that I2C port because the same board bus also controls the PY32 servo power path.
@@ -56,18 +72,53 @@ Kids Tutor stores its long-lived database metadata in PSRAM-backed vectors. Each
 
 Realtime defers proactive battery, idle, touch, and proximity responses while a camera or music function is pending and while another response is in flight. This prevents a second response from reclaiming the single I2S peripheral during shutter playback or camera DMA setup.
 
+Realtime PCM output uses virtual speaker channel 0 and M5Unified's two queue
+slots. Playback begins after the first two fragments have been decoded and both
+slots can be queued back-to-back. Two persistent decode buffers then alternate
+only after a slot becomes free, so the next audio delta is queued before the
+current one ends. A single-fragment response is flushed by `response.done`, which
+drains the final slots before speaker I2S is released; disconnect aborts log the
+incomplete response. Per-response diagnostics include chunk/byte counts, queue
+wait totals, underruns, enqueue failures, drain time, and mid-answer WebSocket
+termination.
+
+OpenAI Realtime TLS and Tailscale Funnel TLS share the embedded official ISRG
+Root X1/X2 trust bundle. The OpenAI endpoint currently chains through Let's
+Encrypt, so the older GTS-only root is not used; hostname and CA validation stay
+enabled on both connections.
+
+CoreS3 startup schedules NTP with `configTime()` and polls completion from the
+main loop without blocking setup. The optional boot MP3 runs in a low-priority
+task through the shared audio mutex. Once the face and active mod are ready the
+UI reports `연결 중 · 터치하면 대기`; a touch before `session.updated` remains
+queued and starts recording after the session becomes ready. Boot-stage elapsed
+times and `ui_ready_ms` are written to Serial. The first power diagnostic also
+records PMIC type, battery/VBUS voltage, battery current, and charge state;
+off-state USB-only startup is treated as a battery/PMIC/power-key-path problem
+because application code cannot execute until those rails are already on.
+
+The user deployment target is `m5stack-cores3-realtime-camera`. It defines
+`ENABLE_CAMERA`, registers `take_photo`, and retains the existing countdown,
+shutter, capture, preview, save/discard flow. `m5stack-cores3-realtime` remains a
+non-camera diagnostic build. Every boot logs whether camera/tool support is
+compiled in so an accidental non-camera flash is immediately visible.
+
 ## Realtime API Function Calling
 
 ### OpenClaw Agent Bridge
 
-`agent_task` delegates diary, PC-side long-term memory, multi-source search, and shopping comparison requests to a LAN PC without replacing the selected LLM. Robot-local functions such as movement, lights, camera, music, study, and timers remain in `FunctionCall`.
+`agent_task` delegates diary, PC-side long-term memory, multi-source search, and shopping comparison requests to a LAN PC without replacing the selected LLM. ChatGPT Realtime also delegates `web_search` through the same worker so Brave TLS and JSON processing never run on its WebSocket task. Robot-local functions such as movement, lights, camera, music, study, and timers remain in `FunctionCall`.
 
 - Configuration and the Bridge authentication key are read from SD `/yaml/SC_SecConfig.yaml` under `agentBridge`; the OpenClaw token is never stored on the device.
 - `StackchanExConfig` bypasses the upstream raw-secret dump and logs only whether secret fields are configured.
-- The request is `POST http://<host>:<port>/v1/agent` with `X-Stackchan-Key` and JSON `profile`, `device_id`, `action`, and `text`. A successful response is HTTP 200 with a `text` field.
-- RealtimeChatGPT starts a low-priority single-flight worker and returns its result through the existing deferred function-call path. The WebSocket task continues processing while HTTP is pending. Disconnect or cancellation advances the request generation so a late result is discarded.
-- Non-Realtime ChatGPT and Gemini use the same client synchronously. Connect and response timeouts are 5 and 60 seconds respectively.
+- With `agentBridge.tls` omitted or false, the request remains `POST http://<host>:<port>/v1/agent`. With `tls: true`, it is `POST https://<host>:<port>/v1/agent` through `WiFiClientSecure`; the embedded Let’s Encrypt ISRG Root X1/X2 roots validate both the certificate chain and hostname, and insecure TLS is never enabled. Both modes send `X-Stackchan-Key` and JSON `profile`, `device_id`, `action`, and `text`; success is HTTP 200 with a `text` field.
+- RealtimeChatGPT starts a low-priority single-flight worker for both `agent_task` and `web_search`, then returns its result through the existing deferred function-call path. The WebSocket task continues processing while HTTP is pending. Disconnect or cancellation advances the request generation so a late result is discarded.
+- Non-Realtime ChatGPT keeps direct Brave Search for `web_search`; its `agent_task` and Gemini's `agent_task` use the Bridge client synchronously. Connect and response timeouts are 5 and 60 seconds respectively.
+- A Realtime Bridge failure is returned to the model without falling back to Brave HTTPS on the WebSocket task.
 - Request arguments, response bodies, diary/memory content, and authentication values are not written to Serial.
+- DNS, TLS, connection, authentication, and timeout failures have distinct redacted diagnostics. The worker logs its stack high-water mark on completion so the 12 KB allocation can be adjusted only from measured evidence.
+- LAN deployments use `tls: false` and typically port 8765. Tailnet-external devices may use a public Tailscale Funnel hostname with `tls: true` and port 443 while the PC Bridge remains bound to `127.0.0.1:8765`.
+- On CoreS3 Realtime builds, AgentBridge's concurrent Funnel connection uses a hybrid mbedTLS allocator: allocations below 4 KiB stay in internal RAM, while larger TLS records prefer PSRAM and fall back to internal RAM only if necessary. This preserves CA validation while avoiding `mbedtls_ssl_setup()` allocation failures with the OpenAI WebSocket active. Redacted capacity and allocator-placement counters are logged around each HTTPS request.
 
 ### Avatar Expression
 

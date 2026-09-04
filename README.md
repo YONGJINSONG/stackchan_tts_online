@@ -82,23 +82,77 @@ Google Cloud TTS는 [Text-to-Speech API](https://cloud.google.com/text-to-speech
 
 ### OpenClaw PC Bridge
 
-기존 LLM과 로봇의 로컬 Function Calling을 유지하면서 일기, PC 장기 기억, 복합 검색, 상품 비교만 OpenClaw에 위임할 수 있다. PC Bridge의 `/health`가 다른 PC나 휴대폰에서 열리는 것을 먼저 확인한 뒤, SD 카드 `/yaml/SC_SecConfig.yaml`에 다음을 추가한다.
+PC Bridge는 OpenClaw 자체가 아니라 CoreS3의 요청을 OpenClaw Gateway로 전달하는
+별도 프로세스다. 이 저장소에는 CoreS3용 Bridge 클라이언트만 포함되며 PC Bridge
+서버는 OpenClaw가 설치된 PC에서 별도로 실행되어 있어야 한다.
+
+ChatGPT Realtime의 `web_search`는 WebSocket task에서 Brave HTTPS를 직접 실행하지
+않고 `AgentBridgeClient`의 12 KB worker를 통해 PC Bridge와 OpenClaw에 위임한다.
+Cascade의 `web_search`는 기존 Brave Search 경로를 유지한다. PC Bridge가 실패해도
+Realtime은 WebSocket task에서 Brave Search로 재시도하지 않는다.
+
+기존 LLM과 로봇의 로컬 Function Calling을 유지하면서 일기, PC 장기 기억, 복합
+검색, 상품 비교만 OpenClaw에 위임할 수 있다. 연결 방식은 같은 LAN의 HTTP와
+Tailscale Funnel의 공개 HTTPS 중 하나를 선택한다.
+
+같은 LAN에서는 Bridge를 `0.0.0.0:8765`에 바인딩하고 다음처럼 설정한다.
 
 ```yaml
 agentBridge:
   enabled: true
   host: "192.168.0.20"  # PC의 LAN IPv4
   port: 8765
+  tls: false
   profile: "kids"       # kids 또는 adult
   deviceId: "roni"
   key: "********"       # PC Bridge의 X-Stackchan-Key 값
 ```
 
-- `host`에 `127.0.0.1`, `localhost`, `http://` 접두사를 넣지 않는다.
+- 같은 LAN의 다른 기기에서 `http://<PC-IP>:8765/health`가 열리지 않으면 Bridge의 LAN 바인딩과 PC 방화벽 TCP 8765 인바운드 규칙을 확인한다.
 - PC 주소가 바뀌지 않도록 공유기에서 DHCP 주소를 예약하는 것을 권장한다.
+
+CoreS3가 스마트폰 핫스팟 등 Tailnet 밖에 있다면 OpenClaw PC의 Bridge를
+`127.0.0.1:8765`에서 실행하고 그 PC에서 Tailscale Funnel reverse proxy를 시작한다.
+[Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel)은 공개 HTTPS를
+제공하며 443, 8443, 10000 포트를 지원한다. MagicDNS, HTTPS 인증서, Funnel 권한이
+먼저 활성화되어 있어야 한다.
+
+```powershell
+tailscale funnel --bg 8765
+tailscale funnel status
+```
+
+`status`가 표시한 HTTPS 주소에서 `https://`를 제외한 호스트명을 사용한다.
+
+```yaml
+agentBridge:
+  enabled: true
+  host: "openclaw-pc.example-tailnet.ts.net"
+  port: 443
+  tls: true
+  profile: "kids"
+  deviceId: "roni"
+  key: "32바이트 이상의 임의 키"
+```
+
+- `host`에는 `http://`, `https://`, 경로를 넣지 않는다. `127.0.0.1`과 `localhost`도 사용할 수 없다.
+- `tls`를 생략하거나 `false`로 두면 기존 LAN HTTP 동작을 유지한다. Funnel은 `tls: true`, `port: 443`으로 사용한다.
+- Funnel HTTPS는 Let’s Encrypt ISRG Root X1/X2로 인증서 체인과 호스트명을 검증하며 `setInsecure()`를 사용하지 않는다.
+- Tailscale HTTPS 인증서 동작은 [공식 HTTPS 인증서 문서](https://tailscale.com/docs/how-to/set-up-https-certificates)를 참고한다.
+- Tailscale을 끈 휴대폰에서 `https://<Funnel-host>/health`가 열리는지 먼저 확인한다.
+- Funnel은 인터넷에 공개되므로 32바이트 이상의 강한 `X-Stackchan-Key`, 요청 크기 제한, rate limit을 Bridge에 적용하고 `/health`에는 비밀정보를 반환하지 않는다.
 - 이 key는 OpenClaw token이 아니다. OpenClaw token은 PC에만 보관한다.
 - 설정 템플릿은 `Copy-to-SD/yaml/SC_SecConfig.yaml`이며, 실제 key는 저장소에 커밋하지 않는다.
 - 연결을 끄려면 `enabled: false`로 바꾸거나 `agentBridge` 블록을 제거한다.
+
+PC에서 실제 요청 계약은 다음처럼 확인할 수 있다. 올바른 키는 HTTP 200과
+`{"text":"..."}`를 반환하고 잘못된 키는 401 또는 403이어야 한다.
+
+```powershell
+$headers = @{ "X-Stackchan-Key" = "32바이트 이상의 임의 키" }
+$body = @{ profile="kids"; device_id="roni"; action="search"; text="테스트" } | ConvertTo-Json
+Invoke-RestMethod "https://<Funnel-host>/v1/agent" -Method Post -Headers $headers -ContentType "application/json" -Body $body
+```
 
 ### 공부 프로그램 쓰는 법
 
@@ -128,7 +182,7 @@ agentBridge:
 | 사용 시간 제한 타이머 (30분, 공부 중 일시정지) | Function Calling `start_timer` |
 | SD카드 음악 재생 | Function Calling `play_sd_content` (music) |
 | SD카드 공부 프로그램 (kids_tutor) | `play_sd_content(study_program)` + KidsTutor 모드. SD `/kids_tutor/` 필요 |
-| 인터넷 검색 (Brave, safesearch strict) | Function Calling `web_search` |
+| 인터넷 검색 | Function Calling `web_search`: ChatGPT Realtime은 PC Bridge/OpenClaw, Cascade는 Brave(safesearch strict) |
 | 사진 촬영 → SD 저장 | `m5stack-cores3-camera` + `take_photo(save)` |
 | 사물 인식 (Vision) | `m5stack-cores3-camera` + `take_photo(recognize_object)` |
 | 사진 → BLE 감열 프린터 | **추가 예정** |

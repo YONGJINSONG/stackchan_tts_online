@@ -266,7 +266,7 @@ const String json_Functions =
   "},"
   "{"
     "\"name\": \"web_search\","
-    "\"description\": \"간단한 사실 확인이나 단발성 최신 검색에 사용한다. SafeSearch strict가 항상 적용된다. 여러 자료를 종합하거나 상품을 비교하는 요청은 agent_task를 사용한다.\","
+    "\"description\": \"간단한 사실 확인이나 단발성 최신 검색에 사용한다. 여러 자료를 종합하거나 상품을 비교하는 요청은 agent_task를 사용한다.\","
     "\"parameters\": {"
       "\"type\":\"object\","
       "\"properties\": {"
@@ -401,6 +401,7 @@ AgentBridgeConfig FunctionCall::getAgentBridgeConfig() const {
   cfg.enabled = source.enabled;
   cfg.host = source.host;
   cfg.port = source.port;
+  cfg.tls = source.tls;
   cfg.profile = source.profile;
   cfg.deviceId = source.deviceId;
   cfg.key = source.key;
@@ -420,7 +421,9 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
   _deferredActionRequested = false;
 
   Serial.println(name);
-  if (strcmp(name, "agent_task") == 0) {
+  const bool redactArguments = strcmp(name, "agent_task") == 0
+                            || (_deferAgentBridge && strcmp(name, "web_search") == 0);
+  if (redactArguments) {
     Serial.println("[AgentBridge] arguments redacted");
   } else {
     Serial.println(args);
@@ -565,8 +568,16 @@ String FunctionCall::exec_calledFunc(const char* name, const char* args){
       response = String("{\"result\":\"") + String(minutes) + "분 타이머를 시작했어요.\"}";
     }
     else if(strcmp(name, "web_search") == 0){
-      const char* query = argsDoc["query"];
-      response = web_search(query ? query : "");
+      const char* query = argsDoc["query"] | "";
+      if (_deferAgentBridge) {
+        if (_agentBridge.start(getAgentBridgeConfig(), "search", String(query))) {
+          _deferredActionRequested = true;
+        } else {
+          response = "OpenClaw가 이전 검색 요청을 처리하고 있어요. 잠시 뒤 다시 말해 주세요.";
+        }
+      } else {
+        response = web_search(query);
+      }
     }
     else if(strcmp(name, "play_sd_content") == 0){
       const char* ctype = argsDoc["content_type"];

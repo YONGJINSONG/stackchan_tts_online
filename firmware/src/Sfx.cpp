@@ -30,6 +30,17 @@ static String   g_pendingFile;
 static String   g_pendingMotion;
 static bool     g_pendingMotionFired = false;
 static uint32_t g_pendingMs = 0;
+static TaskHandle_t g_asyncTask = nullptr;
+static String g_asyncFile;
+
+static void sfx_async_task(void*) {
+  String file = g_asyncFile;
+  bool ok = sfx_play_file(file.c_str());
+  Serial.printf("[sfx] async complete file=%s ok=%d\n", file.c_str(), ok ? 1 : 0);
+  g_asyncFile = String();
+  g_asyncTask = nullptr;
+  vTaskDelete(nullptr);
+}
 
 static void seed_defaults() {
   g_sounds.clear();
@@ -119,6 +130,25 @@ bool sfx_play_event(const char* event) {
   for (auto& s : g_sounds) if (s.event == event && s.file.length()) {
     if (s.motion.length()) motion_play(s.motion);   // 함께 재생할 머리 모션(서보, 사운드와 동시)
     return sfx_play_file(s.file.c_str());
+  }
+  return false;
+}
+
+bool sfx_play_event_async(const char* event) {
+  if (event == nullptr || event[0] == '\0' || g_asyncTask != nullptr) return false;
+  for (auto& s : g_sounds) if (s.event == event && s.file.length()) {
+    if (s.motion.length()) motion_play(s.motion);
+    g_asyncFile = s.file;
+    BaseType_t created = xTaskCreate(sfx_async_task, "sfxBoot", 6 * 1024, nullptr,
+                                     1, &g_asyncTask);
+    if (created != pdPASS) {
+      g_asyncTask = nullptr;
+      g_asyncFile = String();
+      Serial.println("[sfx] async task create failed");
+      return false;
+    }
+    Serial.printf("[sfx] async queued file=%s\n", s.file.c_str());
+    return true;
   }
   return false;
 }

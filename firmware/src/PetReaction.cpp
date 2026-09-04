@@ -14,6 +14,7 @@
 #include "CameraVision.h"
 #include "Robot.h"
 #include "Sfx.h"
+#include "ShakeDetector.h"
 
 extern volatile uint32_t gesture_suppress_until;  // Gesture.cpp — servo is moving the head
 #if defined(REALTIME_API)
@@ -29,6 +30,7 @@ extern bool isOffline;
 struct PetConfig {
     bool enabled    = true;
     int  sensitivity = 5;   // 1..10 (higher = easier to trigger)
+    int  shakeSensitivity = 6; // 1..10 (higher = lighter shake)
     bool speakOnPet = true;
     std::vector<String> prompts;
 };
@@ -50,6 +52,8 @@ static void set_defaults(PetConfig& c) {
 static void clampConfig(PetConfig& c) {
     if (c.sensitivity < 1) c.sensitivity = 1;
     if (c.sensitivity > 10) c.sensitivity = 10;
+    if (c.shakeSensitivity < 1) c.shakeSensitivity = 1;
+    if (c.shakeSensitivity > 10) c.shakeSensitivity = 10;
 }
 
 static bool is_speaking() {
@@ -71,6 +75,7 @@ static void load_from_spiffs() {
             if (!deserializeJson(doc, body)) {
                 c.enabled     = doc["enabled"]     | c.enabled;
                 c.sensitivity = doc["sensitivity"] | c.sensitivity;
+                c.shakeSensitivity = doc["shakeSensitivity"] | c.shakeSensitivity;
                 c.speakOnPet  = doc["speakOnPet"]  | c.speakOnPet;
                 JsonArray pa = doc["prompts"].as<JsonArray>();
                 if (!pa.isNull()) {
@@ -90,6 +95,7 @@ static void buildJson(const PetConfig& c, String& out) {
     DynamicJsonDocument doc(2048);
     doc["enabled"]     = c.enabled;
     doc["sensitivity"] = c.sensitivity;
+    doc["shakeSensitivity"] = c.shakeSensitivity;
     doc["speakOnPet"]  = c.speakOnPet;
     doc["detected"]    = g_detected;
     JsonArray pa = doc.createNestedArray("prompts");
@@ -110,6 +116,7 @@ bool pet_reaction_set_json(const String& json) {
     lock(); c = g_cfg; unlock();
     if (doc.containsKey("enabled"))     c.enabled     = doc["enabled"];
     if (doc.containsKey("sensitivity")) c.sensitivity = doc["sensitivity"];
+    if (doc.containsKey("shakeSensitivity")) c.shakeSensitivity = doc["shakeSensitivity"];
     if (doc.containsKey("speakOnPet"))  c.speakOnPet  = doc["speakOnPet"];
     JsonArray pa = doc["prompts"].as<JsonArray>();
     if (!pa.isNull()) {
@@ -130,12 +137,25 @@ bool pet_reaction_set_json(const String& json) {
 
 // Shared cooldown across IMU and touch-stroke triggers.
 static uint32_t g_lastPetMs = 0;
+static uint32_t g_lastDizzyMs = 0;
 static uint32_t g_lastSpeakMs = 0;
 static uint32_t g_blushUntilMs = 0;
+static uint32_t g_dizzyUntilMs = 0;
 static Expression g_expressionBeforePet = Expression::Neutral;
+static Expression g_expressionBeforeDizzy = Expression::Neutral;
+
+// A normal pet/lift remains easy to trigger. A shake instead requires a timed
+// dominant-axis reversal pattern, so ordinary one-direction handling is ignored.
+static constexpr uint32_t kDizzyDurationMs = 2500;
+static constexpr uint32_t kDizzyCooldownMs = 3000;
+static ShakeDetector g_shakeDetector(6);
 
 bool pet_reaction_blush_active() {
     return g_blushUntilMs != 0 && (int32_t)(g_blushUntilMs - millis()) > 0;
+}
+
+bool pet_reaction_dizzy_active() {
+    return g_dizzyUntilMs != 0 && (int32_t)(g_dizzyUntilMs - millis()) > 0;
 }
 
 // Run the happy "pet me" reaction now. Respects enabled + a 3s cooldown.
@@ -153,18 +173,22 @@ bool pet_reaction_fire() {
     unlock();
     if (!enabled) return false;
 
+    // Do not replace a currently active dizzy expression with the normal
+    // happy pet reaction.  This also covers touch-stroke requests.
+    if (pet_reaction_dizzy_active()) return false;
+
     uint32_t now = millis();
     if (now - g_lastPetMs < 3000) return false;   // cooldown
     bool speakerBusy = is_speaking();
     g_lastPetMs = now;
 
     g_expressionBeforePet = avatar.getExpression();
-    g_blushUntilMs = now + 2500;
+    g_blushUntilMs = now + 3000;
     Serial.printf("[pet] reaction fired (speakerBusy=%d)\n", speakerBusy ? 1 : 0);
     avatar.setExpression(Expression::Happy);
     gesture_play(Expression::Happy);
     if (!speakerBusy) sfx_play_event("pet");
-    idle_motion_hold(2500);
+    idle_motion_hold(3000);
     idle_talk_note_activity();   // count as interaction
 
     if (!speakerBusy && speakOnPet && !isOffline && prompt.length() && (now - g_lastSpeakMs > 15000)) {
@@ -178,7 +202,46 @@ bool pet_reaction_fire() {
     return true;
 }
 
+static bool dizzy_reaction_fire(uint32_t now, const ShakeUpdate& shake) {
+    if (!g_inAiMod) return false;
+
+    bool enabled;
+    lock();
+    enabled = g_cfg.enabled;
+    unlock();
+    if (!enabled || pet_reaction_dizzy_active() || now - g_lastDizzyMs < kDizzyCooldownMs) {
+        return false;
+    }
+
+    // If a strong shake interrupts the happy pet reaction, return to the
+    // expression that predated petting, not to Happy after the dizzy timer.
+    g_expressionBeforeDizzy = avatar.getExpression();
+    if (g_expressionBeforeDizzy == Expression::Happy && pet_reaction_blush_active()) {
+        g_expressionBeforeDizzy = g_expressionBeforePet;
+    }
+    g_blushUntilMs = 0;
+    g_lastDizzyMs = now;
+    g_dizzyUntilMs = now + kDizzyDurationMs;
+
+    avatar.setExpression(Expression::Doubt);
+    idle_motion_hold(kDizzyDurationMs);
+    idle_talk_note_activity();
+    Serial.printf("[pet] shake fired axis=%d peak=%.0f threshold=%.0f reversals=%u\n",
+                  (int)shake.axis, shake.value, shake.threshold,
+                  (unsigned)shake.reversals);
+    return true;
+}
+
 void pet_reaction_tick() {
+    if (g_dizzyUntilMs != 0 && !pet_reaction_dizzy_active()) {
+        // Do not overwrite a later expression chosen by the AI or another
+        // interaction while this reaction was displayed.
+        if (avatar.getExpression() == Expression::Doubt) {
+            avatar.setExpression(g_expressionBeforeDizzy);
+        }
+        g_dizzyUntilMs = 0;
+        Serial.println("[pet] dizzy finished");
+    }
     if (g_blushUntilMs != 0 && !pet_reaction_blush_active()) {
         if (avatar.getExpression() == Expression::Happy) {
             avatar.setExpression(g_expressionBeforePet);
@@ -187,7 +250,10 @@ void pet_reaction_tick() {
         Serial.println("[pet] blush finished");
     }
     if (!g_detected) return;
-    if (camera_is_busy()) return;   // camera owns the internal I2C during capture
+    if (camera_is_busy()) {
+        g_shakeDetector.reset();
+        return;   // camera owns the internal I2C during capture
+    }
 
     static uint32_t lastReadMs = 0;
     static float energy = 0.0f;
@@ -196,21 +262,31 @@ void pet_reaction_tick() {
     if (now - lastReadMs < 40) return;   // ~25 Hz
     lastReadMs = now;
 
-    bool enabled; int sensitivity;
+    bool enabled; int sensitivity; int shakeSensitivity;
     lock();
     enabled = g_cfg.enabled;
     sensitivity = g_cfg.sensitivity;
+    shakeSensitivity = g_cfg.shakeSensitivity;
     unlock();
     if (!enabled) return;
 
     // While a gesture is running the servo physically moves the head, which the
     // IMU registers as motion — ignore it so we don't react to our own gestures.
-    if (now < gesture_suppress_until) { energy *= 0.7f; return; }
+    if (now < gesture_suppress_until) {
+        energy *= 0.7f;
+        g_shakeDetector.reset();
+        return;
+    }
 
     // While Stack-chan is speaking, the speaker physically vibrates the case and
     // the IMU reads it as motion → self-triggered "petting" → it talks to itself.
     // Ignore IMU energy during (and just after) speech.
-    if (is_speaking()) { energy *= 0.7f; g_lastPetMs = now; return; }
+    if (is_speaking()) {
+        energy *= 0.7f;
+        g_shakeDetector.reset();
+        g_lastPetMs = now;
+        return;
+    }
 
     float gx, gy, gz;
     if (!M5.Imu.getGyro(&gx, &gy, &gz)) return;
@@ -218,6 +294,28 @@ void pet_reaction_tick() {
 
     // Low-pass the motion into a decaying "handling energy" score.
     energy = energy * 0.80f + motion * 0.20f;
+
+    if (pet_reaction_dizzy_active()) {
+        energy *= 0.7f;
+        g_shakeDetector.reset();
+        return;
+    }
+
+    g_shakeDetector.setSensitivity(shakeSensitivity);
+    ShakeUpdate shake = g_shakeDetector.update(now, gx, gy, gz);
+    if (shake.reversal) {
+        Serial.printf("[pet] shake reversal axis=%d peak=%.0f threshold=%.0f count=%u\n",
+                      (int)shake.axis, shake.value, shake.threshold,
+                      (unsigned)shake.reversals);
+    }
+    if (shake.triggered) {
+        dizzy_reaction_fire(now, shake);
+        energy = 0.0f;
+        return;
+    }
+    // Reserve an in-progress 800 ms back-and-forth sequence for shake
+    // classification instead of firing the easier one-direction lift reaction.
+    if (g_shakeDetector.active()) return;
 
     // sensitivity 1..10 -> threshold ~260 (hard) .. 35 (easy)
     float threshold = 285.0f - sensitivity * 25.0f;

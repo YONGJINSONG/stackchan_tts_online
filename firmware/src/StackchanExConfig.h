@@ -60,6 +60,7 @@ typedef struct AgentBridgeConf {
     bool enabled = false;
     String host = "";
     uint16_t port = 8765;
+    bool tls = false;
     String profile = "kids";
     String deviceId = "roni";
     String key = "";

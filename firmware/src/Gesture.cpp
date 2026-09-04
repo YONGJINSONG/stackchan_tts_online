@@ -114,29 +114,25 @@ static void gesture_task(void* arg) {
     if (command.type == GestureCommandType::IdleLook) {
 #ifdef USE_SERVO
       // Idle에서는 의미 있는 끄덕임(Y)을 사용하지 않는다.
-      // 대부분 가만히 있고 가끔 주변을 살짝 둘러본다.
+      // IdleMotion already schedules this sparingly (150--210 seconds), so
+      // every accepted idle request performs one small, predictable glance.
       int roll = random(100);
-
-      // 55%: 아무 움직임 없음
-      if (roll < 55) {
-        continue;
-      }
 
       int x;
 
-      if (roll < 90) {
-        // 35%: 자연스러운 좌/우 glance 4~8도
-        int mag = random(4, 9);
+      if (roll < 75) {
+        // Usually a gentle left/right glance of 3--6 degrees.
+        int mag = random(3, 7);
         x = random(2) ? mag : -mag;
       } else {
-        // 10%: 아주 작은 micro motion 1~3도
+        // Occasionally only a tiny micro movement.
         int mag = random(1, 4);
         x = random(2) ? mag : -mag;
       }
 
-      uint32_t moveOut = random(550, 851);
-      uint32_t hold = random(700, 1801);
-      uint32_t moveBack = random(600, 901);
+      uint32_t moveOut = random(500, 751);
+      uint32_t hold = random(600, 1201);
+      uint32_t moveBack = random(500, 751);
 
       // Y=0 고정.
       // 중간에 같은 위치를 다시 지정해 잠시 바라보다가 중앙으로 복귀.

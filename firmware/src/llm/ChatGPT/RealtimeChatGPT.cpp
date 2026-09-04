@@ -153,6 +153,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 	switch(type) {
 		case WStype_DISCONNECTED:
 			Serial.printf("[WSc] Disconnected!\n");
+			p_this->abortAudioStream("websocket_disconnect");
 			g_ws_connected = false;
 			p_this->sessionUpdateSentAt = 0;
 			p_this->setRealtimeSessionReady(false);
@@ -353,6 +354,11 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 #endif
             else if(msgType.equals("response.done")){
                 last_commit_time = 0;
+#ifndef REALTIME_API_WITH_TTS
+                // response.done can arrive as soon as the final PCM delta is
+                // queued. Drain both slots before releasing speaker I2S.
+                p_this->finishAudioStream("response.done");
+#endif
                 // Avoid dumping the full JSON — USB-CDC floods stall the UI loop.
                 int outputNum = p_this->msgDoc["response"]["output"].size();
                 Serial.printf("[WSc] response.done outputs=%d DMA=%u SPIRAM=%u INT=%u\n",

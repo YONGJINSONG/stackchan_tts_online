@@ -14,9 +14,10 @@ apikey:
 
 # PC OpenClaw Bridge. OpenClaw token은 PC에만 두고 여기에는 Bridge key만 넣습니다.
 agentBridge:
-  enabled: false
-  host: "192.168.0.20"  # PC의 LAN IPv4. 127.0.0.1 사용 금지
-  port: 8765
+  enabled: true
+  host: "win-8r91g87ovmk.tail30509d.ts.net"  # Funnel host only; omit https:// and paths
+  port: 443
+  tls: true              # Tailscale Funnel HTTPS
   profile: "kids"       # kids 또는 adult
   deviceId: "roni"
   key: "********"       # PC Bridge의 X-Stackchan-Key 값

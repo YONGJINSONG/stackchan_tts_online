@@ -16,6 +16,7 @@ void   pet_reaction_tick();   // poll from loop() (IMU lift/stroke)
 bool   pet_reaction_fire();   // run the happy reaction now (shared by IMU + touch stroke);
                               // respects enabled + cooldown. Returns true if it fired.
 bool   pet_reaction_blush_active();
+bool   pet_reaction_dizzy_active();
 String pet_reaction_get_json();
 bool   pet_reaction_set_json(const String& json);
 

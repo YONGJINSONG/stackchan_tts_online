@@ -60,6 +60,15 @@ public:
     //
     uint8_t* audioBuf[2];    // Base64をデコードして得た音声データを格納するバッファ。再生直後に更新すると音が切れたのでダブルバッファとした
     int nextBufIdx;          // 次回データを格納するダブルバッファの面（0 or 1）
+    static constexpr uint8_t REALTIME_AUDIO_CHANNEL = 0;
+    bool audioStreamActive;
+    int pendingFirstAudioLen;
+    uint32_t audioChunkCount;
+    uint32_t audioDecodedBytes;
+    uint32_t audioQueueWaitMs;
+    uint32_t audioQueueWaitMaxMs;
+    uint32_t audioUnderrunCount;
+    uint32_t audioEnqueueFailures;
 
 public:
     RealtimeLLMBase(llm_param_t param,
@@ -108,6 +117,8 @@ public:
     int base64_decode(const char* input, int size, char* output);
     void hexdump(const void *mem, uint32_t len, uint8_t cols = 16);
     void streamAudioDelta(String& delta);
+    void finishAudioStream(const char* reason);
+    void abortAudioStream(const char* reason);
 
     // for TTS
     //

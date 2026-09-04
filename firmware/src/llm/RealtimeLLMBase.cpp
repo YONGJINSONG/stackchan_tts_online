@@ -106,6 +106,14 @@ RealtimeLLMBase::RealtimeLLMBase(llm_param_t param,
     response_done(false),
     startTime(0),
     nextBufIdx(0),
+    audioStreamActive(false),
+    pendingFirstAudioLen(0),
+    audioChunkCount(0),
+    audioDecodedBytes(0),
+    audioQueueWaitMs(0),
+    audioQueueWaitMaxMs(0),
+    audioUnderrunCount(0),
+    audioEnqueueFailures(0),
     outputText(String(""))
 {
 #ifdef REALTIME_API_RECORD_TEST
@@ -498,16 +506,108 @@ void RealtimeLLMBase::hexdump(const void *mem, uint32_t len, uint8_t cols) {
 
 void RealtimeLLMBase::streamAudioDelta(String& delta)
 {
-    // Per-chunk Serial logging removed: fired on every audio.delta (~25-50/sec)
-    // INSIDE the playback path, starving the speaker between base64 decode and
-    // playRaw. This was the residual buzz after the WS-task log fix.
+    // M5Unified has two queue slots per virtual channel. Keep both slots fed and
+    // only reuse a backing buffer after the older slot has been consumed. The
+    // previous global isPlaying() wait inserted silence between every delta.
+    if (!audioStreamActive) {
+        audioStreamActive = true;
+        audioChunkCount = 0;
+        audioDecodedBytes = 0;
+        audioQueueWaitMs = 0;
+        audioQueueWaitMaxMs = 0;
+        audioUnderrunCount = 0;
+        audioEnqueueFailures = 0;
+        nextBufIdx = 0;
+        pendingFirstAudioLen = 0;
+    }
+
     int base64Size = delta.length();
     uint8_t* buf = audioBuf[nextBufIdx];
     int len = base64_decode(delta.c_str(), base64Size, (char*)buf);
+    if (len <= 0) {
+        audioEnqueueFailures++;
+        return;
+    }
 
-    while (M5.Speaker.isPlaying()) { vTaskDelay(1); }
-    M5.Speaker.playRaw((int16_t*)buf, len/2, 24000, false);
-    nextBufIdx ^= 1;  //ダブルバッファを切り替え
+    audioChunkCount++;
+    audioDecodedBytes += (uint32_t)len;
+
+    // Hold the first fragment until the second arrives. Enqueuing both virtual
+    // channel slots back-to-back prevents the first fragment from ending while
+    // WebSocket parsing is still delivering the second one. A one-fragment
+    // response is flushed by finishAudioStream().
+    if (audioChunkCount == 1) {
+        pendingFirstAudioLen = len;
+        nextBufIdx = 1;
+        return;
+    }
+    if (pendingFirstAudioLen > 0) {
+        bool firstOk = M5.Speaker.playRaw((int16_t*)audioBuf[0],
+                                          pendingFirstAudioLen / 2, 24000,
+                                          false, 1, REALTIME_AUDIO_CHANNEL, false);
+        bool secondOk = M5.Speaker.playRaw((int16_t*)audioBuf[1], len / 2, 24000,
+                                           false, 1, REALTIME_AUDIO_CHANNEL, false);
+        if (!firstOk) audioEnqueueFailures++;
+        if (!secondOk) audioEnqueueFailures++;
+        pendingFirstAudioLen = 0;
+        nextBufIdx = secondOk ? 0 : (firstOk ? 1 : 0);
+        return;
+    }
+
+    size_t queuedBefore = M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL);
+    if (queuedBefore == 0) audioUnderrunCount++;
+
+    uint32_t waitStarted = millis();
+    while (M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL) >= 2) { vTaskDelay(1); }
+    uint32_t waited = millis() - waitStarted;
+    audioQueueWaitMs += waited;
+    if (waited > audioQueueWaitMaxMs) audioQueueWaitMaxMs = waited;
+
+    bool ok = M5.Speaker.playRaw((int16_t*)buf, len / 2, 24000, false, 1,
+                                 REALTIME_AUDIO_CHANNEL, false);
+    if (ok) {
+        nextBufIdx ^= 1;
+    } else {
+        audioEnqueueFailures++;
+    }
+}
+
+void RealtimeLLMBase::finishAudioStream(const char* reason)
+{
+    if (!audioStreamActive) return;
+    if (pendingFirstAudioLen > 0) {
+        bool ok = M5.Speaker.playRaw((int16_t*)audioBuf[0],
+                                     pendingFirstAudioLen / 2, 24000,
+                                     false, 1, REALTIME_AUDIO_CHANNEL, false);
+        if (!ok) audioEnqueueFailures++;
+        pendingFirstAudioLen = 0;
+    }
+    uint32_t drainStarted = millis();
+    while (M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL)) { vTaskDelay(1); }
+    uint32_t drainMs = millis() - drainStarted;
+    Serial.printf("[WSc] audio complete reason=%s chunks=%u bytes=%u queue_wait_ms=%u max_wait_ms=%u underruns=%u enqueue_fail=%u drain_ms=%u\n",
+                  reason ? reason : "done",
+                  (unsigned)audioChunkCount,
+                  (unsigned)audioDecodedBytes,
+                  (unsigned)audioQueueWaitMs,
+                  (unsigned)audioQueueWaitMaxMs,
+                  (unsigned)audioUnderrunCount,
+                  (unsigned)audioEnqueueFailures,
+                  (unsigned)drainMs);
+    audioStreamActive = false;
+}
+
+void RealtimeLLMBase::abortAudioStream(const char* reason)
+{
+    if (!audioStreamActive) return;
+    Serial.printf("[WSc] audio aborted reason=%s chunks=%u bytes=%u queued=%u underruns=%u enqueue_fail=%u\n",
+                  reason ? reason : "disconnect",
+                  (unsigned)audioChunkCount,
+                  (unsigned)audioDecodedBytes,
+                  (unsigned)M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL),
+                  (unsigned)audioUnderrunCount,
+                  (unsigned)audioEnqueueFailures);
+    audioStreamActive = false;
 }
 
 void RealtimeLLMBase::invokeWebSocketLoopTask(void)

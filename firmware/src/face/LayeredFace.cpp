@@ -1,6 +1,7 @@
 #include "LayeredFace.h"
 #include "Balloon.h"
 #include "Effect.h"
+#include "PetReaction.h"
 #include <cstring>
 #include <esp_heap_caps.h>
 
@@ -11,6 +12,31 @@ Balloon g_balloon;
 Effect g_effect;
 BoundingRect g_br;
 bool g_layered_active = false;
+
+extern "C" const uint8_t blush_pet_png_start[] asm("blush_pet_png_start");
+extern "C" const uint8_t blush_pet_png_end[] asm("blush_pet_png_end");
+
+void seedPetBlushAsset() {
+  static constexpr const char* kPath = "/face/blush/blush_pet.png";
+  if (SD.exists(kPath)) return;
+
+  const size_t size = static_cast<size_t>(blush_pet_png_end - blush_pet_png_start);
+  if (size == 0 || size > 64 * 1024) {
+    Serial.printf("[layered-face] blush_pet seed invalid size=%u\n", (unsigned)size);
+    return;
+  }
+
+  File file = SD.open(kPath, FILE_WRITE);
+  if (!file) {
+    Serial.println("[layered-face] blush_pet seed open failed");
+    return;
+  }
+  const size_t written = file.write(blush_pet_png_start, size);
+  file.close();
+  Serial.printf("[layered-face] blush_pet seed %s bytes=%u/%u\n",
+                written == size ? "ok" : "failed",
+                (unsigned)written, (unsigned)size);
+}
 }  // namespace
 
 bool layered_face_active() { return g_layered_active; }
@@ -173,6 +199,8 @@ LayeredFace::LayerSprite LayeredFace::loadOverlaySprite(const char* path) {
 }
 
 void LayeredFace::loadAll() {
+  seedPetBlushAsset();
+
   _base = loadLayerSprite("/face/base/base.png", true);
   if (!_base) _base = loadLayerSprite("/face/base/base.jpg", true);
   if (!_base) {
@@ -187,6 +215,10 @@ void LayeredFace::loadAll() {
   _eyes[EYE_SAD] = loadOverlaySprite("/face/eyes/eye_sad.png");
   _eyes[EYE_SLEEPY] = loadOverlaySprite("/face/eyes/eye_sleepy.png");
   _eyes[EYE_SURPRISED] = loadOverlaySprite("/face/eyes/eyes_surprised.png");
+  _eyes[EYE_CLOSED] = loadOverlaySprite("/face/eyes/eye_closed.png");
+  _eyes[EYE_LEFT] = loadOverlaySprite("/face/eyes/eye_left.png");
+  _eyes[EYE_PUZZLED] = loadOverlaySprite("/face/eyes/eye_puzzled.png");
+  _eyes[EYE_RIGHT] = loadOverlaySprite("/face/eyes/eye_right.png");
 
   _mouths[MOUTH_IDLE] = loadOverlaySprite("/face/mouth/mouth_idle.png");
   _mouths[MOUTH_SMILE] = loadOverlaySprite("/face/mouth/mouth_smile.png");
@@ -198,12 +230,22 @@ void LayeredFace::loadAll() {
 
   _blush[BLUSH_NORMAL] = loadOverlaySprite("/face/blush/blush_normal.png");
   _blush[BLUSH_SHY] = loadOverlaySprite("/face/blush/blush_shy.png");
+  _blush[BLUSH_PET] = loadOverlaySprite("/face/blush/blush_pet.png");
 
   _fx[FX_TEAR] = loadOverlaySprite("/face/fx/tear.png");
   _fx[FX_ZZZ] = loadOverlaySprite("/face/fx/zzz.png");
 
   _ready = true;
   Serial.println("[layered-face] ready (pre-rasterized, overlays cropped)");
+  Serial.printf("[layered-face] reactions puzzled=%d pet_blush=%d\n",
+                _eyes[EYE_PUZZLED].spr ? 1 : 0,
+                _blush[BLUSH_PET].spr ? 1 : 0);
+  if (!_eyes[EYE_PUZZLED].spr) {
+    Serial.println("[layered-face] eye_puzzled missing; shake fallback=surprised");
+  }
+  if (!_blush[BLUSH_PET].spr) {
+    Serial.println("[layered-face] blush_pet missing; pet fallback=blush_shy");
+  }
 }
 
 LayeredFace::LayeredFace() : Face() {
@@ -252,7 +294,8 @@ void LayeredFace::blitLayer(const LayerSprite& layer, bool opaque) {
   }
 }
 
-void LayeredFace::pickLayers(Expression e, float mouthOpen,
+void LayeredFace::pickLayers(Expression e, float mouthOpen, float eyeOpen,
+                             float gazeHorizontal,
                              EyeId& eye, MouthId& mouth, BlushId& blush, FxId& fx) {
   eye = EYE_CENTER;
   mouth = MOUTH_IDLE;
@@ -280,6 +323,8 @@ void LayeredFace::pickLayers(Expression e, float mouthOpen,
       fx = FX_ZZZ;
       break;
     case Expression::Doubt:
+      // General AI/idle doubt keeps the original surprised design.  The
+      // puzzled overlay is reserved for the short physical shake reaction.
       eye = EYE_SURPRISED;
       mouth = MOUTH_O;
       break;
@@ -289,6 +334,28 @@ void LayeredFace::pickLayers(Expression e, float mouthOpen,
       mouth = MOUTH_IDLE;
       blush = BLUSH_NORMAL;
       break;
+  }
+
+  // The avatar's blink task already drives eyeOpenRatio. Prefer the cropped
+  // closed-eye overlay while it is fully closed, then restore the selected
+  // emotion or neutral gaze layer without allocating or decoding per frame.
+  if (e == Expression::Doubt && pet_reaction_dizzy_active()) {
+    eye = _eyes[EYE_PUZZLED].spr ? EYE_PUZZLED : EYE_SURPRISED;
+  } else if (eyeOpen <= 0.15f && _eyes[EYE_CLOSED].spr) {
+    eye = EYE_CLOSED;
+  } else if (e == Expression::Neutral) {
+    if (gazeHorizontal <= -0.20f && _eyes[EYE_LEFT].spr) {
+      eye = EYE_LEFT;
+    } else if (gazeHorizontal >= 0.20f && _eyes[EYE_RIGHT].spr) {
+      eye = EYE_RIGHT;
+    }
+  }
+
+  // PetReaction owns the timer, while LayeredFace owns the cached blush
+  // overlay.  This makes a touch stroke visibly blush even if another emotion
+  // temporarily changes the eye and mouth layers.
+  if (pet_reaction_blush_active()) {
+    blush = _blush[BLUSH_PET].spr ? BLUSH_PET : BLUSH_SHY;
   }
 
   // Hysteresis so lipSync noise does not thrash rebuilds.
@@ -351,7 +418,9 @@ void LayeredFace::draw(DrawContext* ctx) {
   MouthId mouth;
   BlushId blush;
   FxId fx;
-  pickLayers(ctx->getExpression(), ctx->getMouthOpenRatio(), eye, mouth, blush, fx);
+  const Gaze gaze = ctx->getGaze();
+  pickLayers(ctx->getExpression(), ctx->getMouthOpenRatio(), ctx->getEyeOpenRatio(),
+             gaze.getHorizontal(), eye, mouth, blush, fx);
 
   if (eye != _lastEye || mouth != _lastMouth || blush != _lastBlush || fx != _lastFx) {
     rebuild(eye, mouth, blush, fx);

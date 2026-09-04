@@ -337,16 +337,20 @@
     fetch('/pet_get').then(r => r.json()).then(d => {
       $('petEnabled').checked = !!d.enabled;
       $('petSens').value = d.sensitivity; $('petSensVal').textContent = d.sensitivity;
+      const shakeSensitivity = d.shakeSensitivity || 6;
+      $('shakeSens').value = shakeSensitivity; $('shakeSensVal').textContent = shakeSensitivity;
       $('petSpeak').checked = !!d.speakOnPet;
       $('petPrompts').value = arrToLines(d.prompts);
       $('petDetect').innerHTML = d.detected ? 'IMU 감지됨 ✓' : '<b style="color:#cc2222">IMU 미감지</b>';
     }).catch(e => setStatus($('petStatus'), '로드 실패: ' + e, false));
   }
   $('petSens').addEventListener('input', () => $('petSensVal').textContent = $('petSens').value);
+  $('shakeSens').addEventListener('input', () => $('shakeSensVal').textContent = $('shakeSens').value);
   $('petSaveBtn').addEventListener('click', () => {
     const obj = {
       enabled: $('petEnabled').checked,
       sensitivity: parseInt($('petSens').value, 10),
+      shakeSensitivity: parseInt($('shakeSens').value, 10),
       speakOnPet: $('petSpeak').checked,
       prompts: linesToArr($('petPrompts').value),
     };

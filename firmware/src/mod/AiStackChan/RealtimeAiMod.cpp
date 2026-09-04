@@ -278,10 +278,15 @@ void RealtimeAiMod::idle(void)
   sfx_pump();   // 음성 play_sound 로 큐된 효과음을 발화 끝난 뒤 재생
 
   bool speaking = pRtLLM->isSpeaking();
+  bool sessionReady = pRtLLM->isRealtimeSessionReady();
   if (layered_face_active()) {
     // LayeredFace + avatar 말풍선으로 상태 표시. 립싱크는 lipSync 태스크가 mouthOpenRatio 갱신.
     if (speaking || night_mode_is_forced_sleep()) {
       // keep speech bubble free for captions / sleep face
+    } else if (!sessionReady && pRtLLM->isRealtimeRecordRequested()) {
+      avatar.setSpeechText("연결 중 · 요청 대기");
+    } else if (!sessionReady) {
+      avatar.setSpeechText("연결 중 · 터치하면 대기");
     } else if (pRtLLM->isRealtimeRecording()) {
       avatar.setSpeechText("듣는 중...");
     } else if (pRtLLM->isRealtimeRecordRequested()) {
@@ -294,6 +299,8 @@ void RealtimeAiMod::idle(void)
     if (!roboeyes_view_qr_shown()) {
       if (speaking)                            roboeyes_view_set_status("");
       else if (night_mode_is_forced_sleep())   roboeyes_view_set_status("");
+      else if (!sessionReady && pRtLLM->isRealtimeRecordRequested()) roboeyes_view_set_status("연결 중 · 요청 대기");
+      else if (!sessionReady)                  roboeyes_view_set_status("연결 중 · 터치하면 대기");
       else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");
       else if (pRtLLM->isRealtimeRecordRequested()) roboeyes_view_set_status("연결 중...");
       else                                     roboeyes_view_set_status("터치하면 시작");

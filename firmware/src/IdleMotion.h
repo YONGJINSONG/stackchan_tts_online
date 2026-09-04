@@ -12,8 +12,9 @@
 // the "last expression stays frozen" behaviour by drifting back to life.
 //
 // Everything is tunable from the web UI (/idle_get, /idle_set) and persisted to
-// SPIFFS (/idlemotion.json). Reads config live on each action, so edits apply
-// immediately (no reboot needed).
+// SPIFFS (/idlemotion.json). The JSON exposes independent expression, gaze and
+// head intervals; legacy minIntervalSec/maxIntervalSec remain expression aliases.
+// Reads config live on each action, so edits apply immediately (no reboot needed).
 
 void   idle_motion_init();              // load config + start task (call after avatar/robot ready)
 String idle_motion_get_json();          // current config as JSON (served by /idle_get)

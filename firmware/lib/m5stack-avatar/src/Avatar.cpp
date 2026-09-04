@@ -60,36 +60,14 @@ void drawLoop(void *args) {
 }
 
 void facialLoop(void *args) {
-  int c = 0;
   DriveContext *ctx = reinterpret_cast<DriveContext *>(args);
   Avatar *avatar = ctx->getAvatar();
-  uint32_t saccade_interval = 1000;
-  uint32_t blink_interval = 1000;
-  unsigned long last_saccade_millis = 0;
-  unsigned long last_blink_millis = 0;
-  bool eye_open = true;
 
   for (;;) {
-    if ((millis() - last_saccade_millis) > saccade_interval) {
-      float vertical = rand_r(&seed) / (RAND_MAX / 2.0) - 1;
-      float horizontal = rand_r(&seed) / (RAND_MAX / 2.0) - 1;
-      avatar->setGaze(vertical, horizontal);
-      saccade_interval = 500 + 100 * random(20);
-      last_saccade_millis = millis();
-    }
-    if ((millis()- last_blink_millis) > blink_interval) {
-      if (eye_open) {
-        avatar->setEyeOpenRatio(1);
-        blink_interval = 2500 + 100 * random(20);
-      } else {
-        avatar->setEyeOpenRatio(0);
-        blink_interval = 300 + 10 * random(20);
-      }
-      eye_open = !eye_open;
-      last_blink_millis = millis();
-    }
-
-    // 呼吸周期を millis() 基準で計算（ループ速度に依存しない）
+    // Gaze and blinking are owned by IdleMotion.  The old random saccade
+    // loop ran every 0.5--2.4 seconds and also blinked while sleeping.
+    // Keep only breathing here so application state is the sole owner of
+    // eye direction and openness.
     float f = sin((millis() % AVATAR_BREATH_PERIOD_MS) * 2.0 * PI /
                   AVATAR_BREATH_PERIOD_MS);
     avatar->setBreath(f);
