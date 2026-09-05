@@ -48,6 +48,7 @@ public:   //本当はprivateにしたいところだがコールバック関数�
 private:
     portMUX_TYPE realtimeStateMux = portMUX_INITIALIZER_UNLOCKED;
     RealtimeListenState realtimeState;
+    bool realtimeConnectionError = false;
 
 public:
 #ifdef REALTIME_API_RECORD_TEST
@@ -58,11 +59,14 @@ public:
 
     // for play
     //
-    uint8_t* audioBuf[2];    // Base64をデコードして得た音声データを格納するバッファ。再生直後に更新すると音が切れたのでダブルバッファとした
-    int nextBufIdx;          // 次回データを格納するダブルバッファの面（0 or 1）
+    // The speaker retains a currently-playing PCM pointer as well as two queue
+    // slots, so streaming needs three persistent buffers in rotation.
+    static constexpr uint8_t REALTIME_AUDIO_BUFFER_COUNT = 3;
+    uint8_t* audioBuf[REALTIME_AUDIO_BUFFER_COUNT];
+    int nextBufIdx;
+    int lastAudioBufIdx;
     static constexpr uint8_t REALTIME_AUDIO_CHANNEL = 0;
     bool audioStreamActive;
-    int pendingFirstAudioLen;
     uint32_t audioChunkCount;
     uint32_t audioDecodedBytes;
     uint32_t audioQueueWaitMs;
@@ -104,6 +108,7 @@ public:
     void stopRealtimeRecord();
     void pauseRealtimeRecord(bool preserveRequest = true);
     void setRealtimeSessionReady(bool ready);
+    void setRealtimeConnectionError(bool value);
     void setRealtimeSpeaking(bool value, bool resumeListening = true);
     bool expireQueuedListen(uint32_t nowMs);
     RealtimeStateSnapshot getRealtimeStateSnapshot();
@@ -112,6 +117,7 @@ public:
     bool isRealtimeRecording() {return getRealtimeStateSnapshot().recording;};
     bool isRealtimeRecordRequested() {return getRealtimeStateSnapshot().recordRequested;};
     bool isRealtimeSessionReady() {return getRealtimeStateSnapshot().sessionReady;};
+    bool hasRealtimeConnectionError();
     bool isSpeaking() override {return getRealtimeStateSnapshot().speaking;};
 
     int base64_decode(const char* input, int size, char* output);

@@ -194,13 +194,20 @@ void RealtimeAiMod::display_touched(int16_t x, int16_t y)
     if (sessionReady) {
       sw_tone();
     } else {
+      if (!listenRequested && pRtLLM->hasRealtimeConnectionError()) {
+        // A tap on the error state is an explicit retry. Reset/reconnect first,
+        // then queue exactly one listen request below.
+        Serial.println("[realtime] connection error retry requested by touch");
+        pRtLLM->requestReconnect();
+        pRtLLM->setRealtimeConnectionError(false);
+      }
       Serial.println("[realtime] tap before session ready; queuing without tone");
-      // A queued listen starts automatically after session.updated. Repeated
-      // taps while reconnecting used to toggle that request back off, which
-      // made a healthy touch panel look intermittent to the user.
+      // A second tap is an explicit cancel while the session is still pending.
+      // Keep it state-only: the WebSocket task may own audio/TLS at this point.
       if (listenRequested) {
-        avatar.setSpeechText("연결 중...");
-        Serial.println("[realtime] listen already queued; repeated tap ignored");
+        pRtLLM->stopRealtimeRecord();
+        avatar.setSpeechText("연결 중 · 터치하면 대기");
+        Serial.println("[realtime] queued listen cancelled by touch");
         return;
       }
     }
@@ -279,10 +286,13 @@ void RealtimeAiMod::idle(void)
 
   bool speaking = pRtLLM->isSpeaking();
   bool sessionReady = pRtLLM->isRealtimeSessionReady();
+  bool sessionError = pRtLLM->hasRealtimeConnectionError();
   if (layered_face_active()) {
     // LayeredFace + avatar 말풍선으로 상태 표시. 립싱크는 lipSync 태스크가 mouthOpenRatio 갱신.
     if (speaking || night_mode_is_forced_sleep()) {
       // keep speech bubble free for captions / sleep face
+    } else if (sessionError && !pRtLLM->isRealtimeRecordRequested()) {
+      avatar.setSpeechText("연결 오류 · 터치해 재시도");
     } else if (!sessionReady && pRtLLM->isRealtimeRecordRequested()) {
       avatar.setSpeechText("연결 중 · 요청 대기");
     } else if (!sessionReady) {
@@ -299,6 +309,7 @@ void RealtimeAiMod::idle(void)
     if (!roboeyes_view_qr_shown()) {
       if (speaking)                            roboeyes_view_set_status("");
       else if (night_mode_is_forced_sleep())   roboeyes_view_set_status("");
+      else if (sessionError && !pRtLLM->isRealtimeRecordRequested()) roboeyes_view_set_status("연결 오류 · 터치해 재시도");
       else if (!sessionReady && pRtLLM->isRealtimeRecordRequested()) roboeyes_view_set_status("연결 중 · 요청 대기");
       else if (!sessionReady)                  roboeyes_view_set_status("연결 중 · 터치하면 대기");
       else if (pRtLLM->isRealtimeRecording())  roboeyes_view_set_status("듣는 중...");

@@ -106,8 +106,8 @@ RealtimeLLMBase::RealtimeLLMBase(llm_param_t param,
     response_done(false),
     startTime(0),
     nextBufIdx(0),
+    lastAudioBufIdx(0),
     audioStreamActive(false),
-    pendingFirstAudioLen(0),
     audioChunkCount(0),
     audioDecodedBytes(0),
     audioQueueWaitMs(0),
@@ -124,8 +124,8 @@ RealtimeLLMBase::RealtimeLLMBase(llm_param_t param,
 #endif
 
 #ifndef REALTIME_API_WITH_TTS
-  // ストリーミング音声再生用のダブルバッファを初期化
-  for(int i=0; i<2; i++){
+  // ストリーミング音声再生用の3バッファを初期化
+  for(int i=0; i<REALTIME_AUDIO_BUFFER_COUNT; i++){
     audioBuf[i] = (uint8_t*)malloc(100 * 1024);
     memset(audioBuf[i], 0, 100 * 1024);
   }
@@ -302,7 +302,7 @@ void RealtimeLLMBase::webSocketProcess()
 
 int RealtimeLLMBase::getAudioLevel()
 {
-    return abs(*audioBuf[nextBufIdx ^ 1]) * 50;
+    return abs(*audioBuf[lastAudioBufIdx]) * 50;
 }
 
 void RealtimeLLMBase::startRealtimeRecord()
@@ -506,9 +506,10 @@ void RealtimeLLMBase::hexdump(const void *mem, uint32_t len, uint8_t cols) {
 
 void RealtimeLLMBase::streamAudioDelta(String& delta)
 {
-    // M5Unified has two queue slots per virtual channel. Keep both slots fed and
-    // only reuse a backing buffer after the older slot has been consumed. The
-    // previous global isPlaying() wait inserted silence between every delta.
+    // M5Unified retains a pointer to the PCM data currently being played as well
+    // as its two queue slots. Its documented safe streaming pattern is three
+    // persistent buffers in rotation; queue occupancy alone does not show the
+    // buffer currently being read by the speaker task.
     if (!audioStreamActive) {
         audioStreamActive = true;
         audioChunkCount = 0;
@@ -518,7 +519,7 @@ void RealtimeLLMBase::streamAudioDelta(String& delta)
         audioUnderrunCount = 0;
         audioEnqueueFailures = 0;
         nextBufIdx = 0;
-        pendingFirstAudioLen = 0;
+        lastAudioBufIdx = 0;
     }
 
     int base64Size = delta.length();
@@ -532,56 +533,43 @@ void RealtimeLLMBase::streamAudioDelta(String& delta)
     audioChunkCount++;
     audioDecodedBytes += (uint32_t)len;
 
-    // Hold the first fragment until the second arrives. Enqueuing both virtual
-    // channel slots back-to-back prevents the first fragment from ending while
-    // WebSocket parsing is still delivering the second one. A one-fragment
-    // response is flushed by finishAudioStream().
-    if (audioChunkCount == 1) {
-        pendingFirstAudioLen = len;
-        nextBufIdx = 1;
-        return;
-    }
-    if (pendingFirstAudioLen > 0) {
-        bool firstOk = M5.Speaker.playRaw((int16_t*)audioBuf[0],
-                                          pendingFirstAudioLen / 2, 24000,
-                                          false, 1, REALTIME_AUDIO_CHANNEL, false);
-        bool secondOk = M5.Speaker.playRaw((int16_t*)audioBuf[1], len / 2, 24000,
-                                           false, 1, REALTIME_AUDIO_CHANNEL, false);
-        if (!firstOk) audioEnqueueFailures++;
-        if (!secondOk) audioEnqueueFailures++;
-        pendingFirstAudioLen = 0;
-        nextBufIdx = secondOk ? 0 : (firstOk ? 1 : 0);
-        return;
-    }
-
-    size_t queuedBefore = M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL);
-    if (queuedBefore == 0) audioUnderrunCount++;
-
     uint32_t waitStarted = millis();
-    while (M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL) >= 2) { vTaskDelay(1); }
+    if (M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL) == 0) audioUnderrunCount++;
+    // playRaw waits internally for a queue slot. Cycling through three buffers
+    // means this buffer cannot still be the current speaker PCM pointer.
+    bool ok = M5.Speaker.playRaw((int16_t*)buf, len / 2, 24000, false, 1,
+                                 REALTIME_AUDIO_CHANNEL, false);
     uint32_t waited = millis() - waitStarted;
     audioQueueWaitMs += waited;
     if (waited > audioQueueWaitMaxMs) audioQueueWaitMaxMs = waited;
 
-    bool ok = M5.Speaker.playRaw((int16_t*)buf, len / 2, 24000, false, 1,
-                                 REALTIME_AUDIO_CHANNEL, false);
     if (ok) {
-        nextBufIdx ^= 1;
+        lastAudioBufIdx = nextBufIdx;
+        nextBufIdx = (nextBufIdx + 1) % REALTIME_AUDIO_BUFFER_COUNT;
     } else {
         audioEnqueueFailures++;
     }
 }
 
+void RealtimeLLMBase::setRealtimeConnectionError(bool value)
+{
+    portENTER_CRITICAL(&realtimeStateMux);
+    realtimeConnectionError = value;
+    portEXIT_CRITICAL(&realtimeStateMux);
+}
+
+bool RealtimeLLMBase::hasRealtimeConnectionError()
+{
+    bool value;
+    portENTER_CRITICAL(&realtimeStateMux);
+    value = realtimeConnectionError;
+    portEXIT_CRITICAL(&realtimeStateMux);
+    return value;
+}
+
 void RealtimeLLMBase::finishAudioStream(const char* reason)
 {
     if (!audioStreamActive) return;
-    if (pendingFirstAudioLen > 0) {
-        bool ok = M5.Speaker.playRaw((int16_t*)audioBuf[0],
-                                     pendingFirstAudioLen / 2, 24000,
-                                     false, 1, REALTIME_AUDIO_CHANNEL, false);
-        if (!ok) audioEnqueueFailures++;
-        pendingFirstAudioLen = 0;
-    }
     uint32_t drainStarted = millis();
     while (M5.Speaker.isPlaying(REALTIME_AUDIO_CHANNEL)) { vTaskDelay(1); }
     uint32_t drainMs = millis() - drainStarted;

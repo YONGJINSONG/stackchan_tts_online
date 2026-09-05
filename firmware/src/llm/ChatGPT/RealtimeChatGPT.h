@@ -36,6 +36,8 @@ public:   //本当はprivateにしたいところだがコールバック関数�
     bool reconnectRequest = false;
     String reconnectReason;
     uint32_t sessionUpdateSentAt = 0;
+    uint8_t sessionFailureCount = 0;
+    bool suppressDisconnectFailure = false;
 
     volatile bool hasDeferredFunctionCall = false;
     String deferredFunctionCallId;
@@ -53,6 +55,8 @@ public:
     void onWebSocketTick() override;
     void requestReconnect() override;
     void queueReconnect(const char* reason);
+    void noteSessionFailure(const char* reason, const String& detail = String(),
+                            bool requestReconnectNow = true);
 };
 
 

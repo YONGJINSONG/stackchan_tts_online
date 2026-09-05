@@ -105,7 +105,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         exitMutexAudio();
         p_this->startRealtimeRecord();
 
-        for(int i=0; i<2; i++){
+        for(int i=0; i<RealtimeLLMBase::REALTIME_AUDIO_BUFFER_COUNT; i++){
             memset(p_this->audioBuf[i], 0, 100 * 1024);
         }
         p_this->setRealtimeSpeaking(false);
@@ -278,7 +278,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 exitMutexAudio();
                 p_this->startRealtimeRecord();
 
-                for(int i=0; i<2; i++){
+                for(int i=0; i<RealtimeLLMBase::REALTIME_AUDIO_BUFFER_COUNT; i++){
                     memset(p_this->audioBuf[i], 0, 100 * 1024);
                 }
                 p_this->setRealtimeSpeaking(false);

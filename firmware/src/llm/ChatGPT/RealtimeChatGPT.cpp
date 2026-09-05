@@ -34,7 +34,6 @@ static const char session_update[] =
         "\"type\": \"session.update\","
         "\"session\": {"
           "\"type\": \"realtime\","
-          "\"model\": \"" OPENAI_REALTIME_MODEL "\","
 #ifdef REALTIME_API_WITH_TTS
           "\"output_modalities\": [\"text\"],"
 #else
@@ -152,6 +151,9 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
 	switch(type) {
 		case WStype_DISCONNECTED:
+		{
+			const bool failedBeforeWebSocketConnected =
+				!g_ws_connected && !p_this->suppressDisconnectFailure;
 			Serial.printf("[WSc] Disconnected!\n");
 			p_this->abortAudioStream("websocket_disconnect");
 			g_ws_connected = false;
@@ -197,7 +199,14 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 p_this->deferredFunctionCallId = "";
                 Serial.println("[camera-action] deferred call abandoned on disconnect");
             }
+			if (failedBeforeWebSocketConnected) {
+				// TLS/TCP setup failures never reach WStype_CONNECTED and the
+				// WebSockets library only reports DISCONNECTED. Count them here,
+				// but let the library's reconnect interval start the next attempt.
+				p_this->noteSessionFailure("transport_connect", String(), false);
+			}
 			break;
+		}
 		case WStype_CONNECTED:
 			Serial.printf("[WSc] Connected to url: %s\n", payload);
 			g_ws_connected = true;
@@ -274,7 +283,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 				if (p_this->sendTextChecked("session_update", sessionUpdateStr)) {
 					p_this->sessionUpdateSentAt = millis();
 				} else {
-					p_this->sessionUpdateSentAt = 0;
+					p_this->noteSessionFailure("session_update_send");
 				}
             }
 			break;
@@ -295,6 +304,8 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             if(msgType.equals("session.updated")){
                 Serial.println("[WSc] session.updated — ready (tap to talk)");
                 p_this->sessionUpdateSentAt = 0;
+                p_this->sessionFailureCount = 0;
+                p_this->setRealtimeConnectionError(false);
                 p_this->setRealtimeSessionReady(true);
                 avatar.setSpeechText(p_this->isRealtimeRecording() ? "듣는 중..." : "터치해서 시작");
             }
@@ -465,7 +476,7 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                         p_this->stopRealtimeRecord();
                     }
 
-                    for(int i=0; i<2; i++){
+                    for(int i=0; i<RealtimeLLMBase::REALTIME_AUDIO_BUFFER_COUNT; i++){
                         memset(p_this->audioBuf[i], 0, 100 * 1024);
                     }
                     p_this->setRealtimeSpeaking(false, !modeSwitchRequested);
@@ -487,7 +498,11 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                 //Serial.printf("[WSc] payload: %s\n", payload);
             }
             else if(msgType.equals("error")){
-                Serial.printf("[WSc] payload: %s\n", payload);
+                String code = p_this->msgDoc["error"]["code"] | "unknown";
+                String message = p_this->msgDoc["error"]["message"] | "";
+                message.replace("\n", " ");
+                if (message.length() > 120) message = message.substring(0, 120);
+                p_this->noteSessionFailure("server_error", code + ": " + message);
             }
             else {
                 Serial.printf("[WSc] type=%s len=%u\n", msgType.c_str(), (unsigned)length);
@@ -506,6 +521,12 @@ static void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 				              (int)(length - 2), (const char*)(payload + 2));
 			} else {
 				Serial.printf("[WSc] error/close len=%u\n", (unsigned)length);
+			}
+			if (!p_this->isRealtimeSessionReady()) {
+				String detail = length >= 2
+					? String(((uint16_t)payload[0] << 8) | payload[1])
+					: String("no_close_code");
+				p_this->noteSessionFailure("websocket_error", detail);
 			}
 			break;
 		case WStype_FRAGMENT_TEXT_START:
@@ -697,7 +718,13 @@ void RealtimeChatGPT::pushUserText(const String& text) {
 
 // Request a session reconnect (handled on the WS task in onWebSocketTick).
 void RealtimeChatGPT::requestReconnect() {
-  queueReconnect("persona_update");
+  const bool manualRetry = hasRealtimeConnectionError();
+  if (manualRetry) {
+    sessionFailureCount = 0;
+    setRealtimeConnectionError(false);
+    Serial.println("[WSc] manual retry requested; failure state reset");
+  }
+  queueReconnect(manualRetry ? "manual_retry" : "persona_update");
 }
 
 void RealtimeChatGPT::queueReconnect(const char* reason) {
@@ -707,6 +734,28 @@ void RealtimeChatGPT::queueReconnect(const char* reason) {
     reconnectRequest = true;
   }
   if (reconnectMux) xSemaphoreGive(reconnectMux);
+}
+
+void RealtimeChatGPT::noteSessionFailure(const char* reason, const String& detail,
+                                         bool requestReconnectNow) {
+  last_commit_time = 0;
+  sessionUpdateSentAt = 0;
+  setRealtimeSessionReady(false);
+  if (sessionFailureCount < UINT8_MAX) sessionFailureCount++;
+  Serial.printf("[WSc] session failure count=%u reason=%s detail=%s\n",
+                (unsigned)sessionFailureCount,
+                reason ? reason : "unknown",
+                detail.c_str());
+  diag_log("realtime session failure count=%u reason=%s detail=%s",
+           (unsigned)sessionFailureCount,
+           reason ? reason : "unknown",
+           detail.c_str());
+  if (sessionFailureCount >= 2) {
+    // State-only cancellation: do not alter I2S or TLS outside their owner.
+    stopRealtimeRecord();
+    setRealtimeConnectionError(true);
+  }
+  if (requestReconnectNow) queueReconnect(reason);
 }
 
 // Runs on the WebSocket task each iteration (after webSocket.loop()). This is the only
@@ -726,7 +775,11 @@ void RealtimeChatGPT::onWebSocketTick() {
     sessionUpdateSentAt = 0;
     Serial.printf("[WSc] reconnecting reason=%s\n", reconnectNow.c_str());
     diag_log("WS reconnect reason=%s", reconnectNow.c_str());
+    // disconnect() invokes WStype_DISCONNECTED synchronously. This is an
+    // intentional reset, not another failed transport attempt.
+    suppressDisconnectFailure = true;
     webSocket.disconnect();
+    suppressDisconnectFailure = false;
     return;
   }
 
@@ -735,9 +788,7 @@ void RealtimeChatGPT::onWebSocketTick() {
     Serial.printf("[WSc] session.updated timeout (%ums) — reconnect queued\n",
                   (unsigned)(millis() - sessionUpdateSentAt));
     diag_log("session.updated timeout %ums", (unsigned)(millis() - sessionUpdateSentAt));
-    sessionUpdateSentAt = 0;
-    setRealtimeSessionReady(false);
-    queueReconnect("session_ready_timeout");
+    noteSessionFailure("session_ready_timeout");
     return;
   }
 

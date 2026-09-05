@@ -378,12 +378,17 @@ void LayeredFace::pickLayers(Expression e, float mouthOpen, float eyeOpen,
 }
 
 void LayeredFace::rebuild(EyeId eye, MouthId mouth, BlushId blush, FxId fx) {
+  static constexpr int16_t kBlushYOffset = 16;
   if (!_composite || !_base) return;
   blitLayer(_base, true);
-  if (blush >= 0 && blush < BLUSH_COUNT) blitLayer(_blush[blush], false);
+  if (blush >= 0 && blush < BLUSH_COUNT) {
+    LayerSprite blushLayer = _blush[blush];
+    blushLayer.y += kBlushYOffset;
+    blitLayer(blushLayer, false);
+  }
   if (blush == BLUSH_SHY && _blush[BLUSH_SHY].spr == nullptr) {
-    _composite->fillEllipse(72, 158, 25, 10, 0xF98F);
-    _composite->fillEllipse(248, 158, 25, 10, 0xF98F);
+    _composite->fillEllipse(72, 158 + kBlushYOffset, 25, 10, 0xF98F);
+    _composite->fillEllipse(248, 158 + kBlushYOffset, 25, 10, 0xF98F);
   }
 
   const LayerSprite& eyeSpr = _eyes[eye].spr ? _eyes[eye] : _eyes[EYE_CENTER];
